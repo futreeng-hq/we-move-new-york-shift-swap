@@ -217,9 +217,14 @@ export default function LoginPage() {
           <h1 style={{ fontSize: 26, fontWeight: 800, color: C.white }}>{mode === "signin" ? "Sign In" : "Create Account"}</h1>
         </div>
 
-        <p style={{ fontSize: 11, color: "rgba(255,255,255,.35)", textAlign: "center", marginBottom: 16, lineHeight: 1.5 }}>
-          Not affiliated with, endorsed by, or operated by TWU Local 100, the MTA, NYCT, or any labor union. Unofficial peer-to-peer tool.{" "}
-          <a href="/disclaimer" style={{ color: "rgba(255,255,255,.45)", textDecoration: "underline" }}>Disclaimer</a>
+        {/* Non-affiliation notice. Must stay readable (not fine print) and must
+            appear on the Register tab, not only behind the consent modal —
+            it is a launch requirement, and at 11px/35% opacity on #010028 it
+            was below WCAG contrast. */}
+        <p style={{ fontSize: 13, color: "rgba(255,255,255,.72)", textAlign: "center", marginBottom: 16, lineHeight: 1.6 }}>
+          We Move NY is not affiliated with, endorsed by, or operated by TWU Local 100 or the MTA.{" "}
+          Unofficial peer-to-peer tool, not affiliated with NYCT or any labor union.{" "}
+          <a href="/disclaimer" style={{ color: "rgba(255,255,255,.8)", textDecoration: "underline" }}>Disclaimer</a>
         </p>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, background: C.s, borderRadius: 12, padding: 4, marginBottom: 18 }}>
@@ -368,7 +373,7 @@ export default function LoginPage() {
                 <strong style={{ color: C.white }}>WMNY Shift Swap</strong> is an unofficial peer-to-peer tool for MTA bus operators to coordinate shift swaps among themselves.
               </p>
               <p style={{ margin: "0 0 12px" }}>
-                This platform is <strong style={{ color: C.white }}>not affiliated with, endorsed by, or operated by the MTA</strong>, any transit agency, or any labor union.
+                <strong style={{ color: C.white }}>We Move NY is not affiliated with, endorsed by, or operated by TWU Local 100 or the MTA.</strong> Nor by any other transit agency or labor union.
               </p>
               <p style={{ margin: "0 0 12px" }}>
                 All swap agreements are <strong style={{ color: C.white }}>between operators only</strong>. It is your responsibility to ensure any swap complies with your collective bargaining agreement, depot rules, and all applicable MTA policies before submitting to your dispatcher.
