@@ -4,10 +4,13 @@
 That document's blocker list is still the right list. This one records what has
 since been verified, what was found that it missed, and what is still open.
 
-**Decision: every code-side item is now closed. What remains is deployment and
-the checks that can only be done in the live accounts — listed in §5.**
+**Decision: every code-side item is closed, and the work is now BUILT and
+TESTED. What remains is deployment and the checks that can only be done in the
+live accounts — listed in §5.**
 
-Updated 2026-09-25 (second pass) after working through the full punch list.
+Updated 2026-09-25 (third pass). The first two passes could not compile or run
+anything, because `prisma generate` was failing against a blocked host; that is
+resolved, so the numbers below are executed results rather than static review.
 
 ---
 
@@ -116,32 +119,40 @@ And `messages/thread` DELETE genuinely had no block check — the one message pa
 that didn't — and its `{ deleted: n }` count disclosed whether a conversation
 with that user existed. Fixed in patch 0002.
 
-### B3 — DB/Redis-backed test pass → **cannot be closed from here**
-
-`binaries.prisma.sh` is blocked by egress policy in the environment this session
-runs in, so `prisma generate` fails, and therefore `next build`, `prisma db
-push` and the DB-backed suite could not run. This is an environment limit, not a
-repo problem.
-
-What *was* run here:
+### B3 — DB/Redis-backed test pass → **CLOSED, with an executed run**
 
 | Check | Result |
 |---|---|
-| Pure test subset (`npm run test:concurrent`) | **43 passed, 0 failed, 24 skipped** |
-| `test/nyDate.test.ts` after new DST coverage | **14 passed**, under `TZ=UTC` and `TZ=Asia/Tokyo` |
-| `tsc --noEmit` | 111 errors, **identical to the pre-change baseline** |
-| `eslint .` | 30 problems (19 errors), **identical to baseline** |
+| `npm test` (real Postgres 16 + Redis REST adapter) | **86 passed, 0 failed, 1 skipped** |
+| `npm run build` | **succeeded** — every route compiled |
+| `tsc --noEmit` | **0 errors** |
+| `npm run lint` | **0 errors**, 10 warnings |
+| All 16 migrations against an **empty** database | **applied cleanly** |
+| Both partial unique indexes after that migrate | **present** |
+| CI's three canary assertions | **all fire** |
 
-The 24 skips are the DB/Redis-gated tests — exactly the ones the readiness doc
-refuses to accept as passing. **The good news: CI already solves this properly.**
-`.github/workflows/ci.yml` has a Postgres service container, a Redis REST
-adapter, and canary assertions that fail the job if the DB-backed and
-Redis-backed tests silently skip. B3's acceptance criteria are satisfied by a
-green CI run on this branch — that is where the evidence should come from, not
-from a laptop.
+The single remaining skip is `A12 (Redis-less fallback)`, which is gated to run
+only when Redis is **absent**. Skipping it with Redis configured is the correct
+outcome, not a gap. The earlier run reported 24 skips; those were the DB- and
+Redis-gated tests, and every one of them now executes.
 
-Note that 19 of those eslint problems are **errors**, so `npm run lint` fails
-today. CI runs build and test but not lint, which is why nobody noticed.
+Two notes on how this was reached, because they matter for reading the rest of
+this document:
+
+- `prisma generate` had been failing because the CLI resolves a schema-engine
+  binary at startup from a host this sandbox's egress policy blocks. The binary
+  is not actually needed for `generate`, so pinning `PRISMA_SCHEMA_ENGINE_BINARY`
+  past the lookup produced a working client. That is why the first two passes
+  reported "111 type errors, identical to baseline" — all 111 were the
+  missing-client artifact. With the real client, the count is **zero**.
+- The build reaches completion but cannot fetch Poppins from
+  `fonts.googleapis.com`, which is also blocked here. To prove everything else
+  compiles, that one import was stubbed locally, the build run, and the stub
+  reverted immediately — `app/layout.tsx` is byte-identical to before. CI has
+  open network and will fetch the font normally.
+
+The full-suite run was also repeated twice back-to-back against a single Redis
+instance to confirm it is re-run safe; see the test-isolation fix in §6.
 
 ### B4 — dependency audit → **closed, and now closed structurally**
 
@@ -300,7 +311,7 @@ post-sign-in flow is untouched.
 
 ## 3. The patches
 
-Seven commits on branch `fix/launch-blockers-session-revocation`, one per phase.
+Ten commits on branch `fix/launch-blockers-session-revocation`, one per phase.
 
 | # | Scope |
 |---|---|
@@ -312,32 +323,31 @@ Seven commits on branch `fix/launch-blockers-session-revocation`, one per phase.
 | 0006 | Revocation moved into `requireUser()`; login/register/rate-limit/profile hardening |
 | 0007 | Disputes queue, cron idempotency, dependency + lint hygiene, registration gate |
 | 0008 | Tests for the redaction, scrubbing and IP-validation fixes |
+| 0010 | CI on `migrate deploy`, partial-index assertion, test isolation |
 
 ### What has actually been verified here
 
 | Check | Result |
 |---|---|
-| `npm run test:concurrent` | **55 passed, 0 failed, 24 skipped** (was 43 passed) |
-| `npm run lint` | **0 errors, 10 warnings** — was 19 errors, and now gates CI |
-| `tsc --noEmit` | 111 errors, **identical to the pre-change baseline** |
+| `npm test` (Postgres 16 + Redis REST adapter) | **86 passed, 0 failed, 1 correctly-skipped** |
+| `npm run build` | **succeeded**, all routes compiled |
+| `tsc --noEmit` | **0 errors** |
+| `npm run lint` | **0 errors**, 10 warnings, now gating CI |
+| 16 migrations from empty + both partial indexes | **verified** |
 
-All 111 remaining type errors are the same pre-existing class: implicit `any`
-from the un-generated Prisma client. They resolve when `prisma generate` runs.
+Two things were caught by actually running the code rather than reading it, which
+is the argument for not trusting a static pass:
 
-**What has NOT been verified:** `next build` never ran, and neither did the 24
-DB/Redis-backed tests. `binaries.prisma.sh` is blocked by egress policy in the
-environment this session runs in, so `prisma generate` fails and everything
-downstream of it is unreachable. **A green CI run on this branch is the gate** —
-CI has the Postgres service, the Redis REST adapter, and canary assertions that
-fail the job if those tests silently skip.
-
-Worth knowing how much the one test file earned: writing
-`test/sensitiveUrl.test.ts` found a live bug in patch 0003. `scrubEvent` applied
-`redactSensitiveUrl()` to `event.message`, but that function parses its input
-*as* a URL — so `"failed at https://host/reset-password/<jwt>"` fell through and
-came back untouched, and the token would still have reached Sentry by that route.
-Fixed with `redactSensitiveText()` in patch 0008. Treat the remaining unbuilt,
-un-DB-tested surface with the same suspicion.
+1. Writing `test/sensitiveUrl.test.ts` found a live bug in patch 0003.
+   `scrubEvent` fed `event.message` to `redactSensitiveUrl()`, which parses its
+   input *as* a URL — so `"failed at https://host/reset-password/<jwt>"` fell
+   through untouched and the token would still have reached Sentry by that route.
+   Fixed with `redactSensitiveText()` in patch 0008.
+2. Running the suite twice exposed a test-isolation trap: `test/growth.test.ts`
+   used a hardcoded `x-forwarded-for`, and register is rate-limited 5/hour per IP
+   with Redis state outliving a single `npm test`. It passed on a fresh Redis and
+   then failed with an opaque 429 — which a CI job retry would have hit. Fixed in
+   patch 0010.
 
 ### Merge conflict you need to resolve deliberately
 
@@ -398,12 +408,16 @@ signature. There are no remaining code-side items.
 
 1. **Deploy `main`.** The security fixes have been undeployed since 2026-09-18;
    the live build is from 2026-07-25. This is the single largest gap.
-2. **Green CI run** on the fix branch. That is the B3 evidence, and it is also
-   the first real `next build` and the first execution of the 24 DB/Redis tests.
-3. **Rehearse `migrate deploy` against an empty database**, then confirm both
-   partial unique indexes exist in the resulting schema. Then re-read
-   `docs/migration-baseline-squash.md` and decide whether that squash is still
-   needed at all — the bug it was written for does not exist.
+2. **Green CI run** on the fix branch — the formal gate. Expected green: the
+   same suite, build, migrations and index assertion all pass locally against a
+   real Postgres and the Redis adapter. ~~the first real build~~ (done, §B3).
+3. ~~Rehearse `migrate deploy` against an empty database.~~ **Done.** All 16
+   migrations apply cleanly from empty and both partial unique indexes are
+   present. CI now uses `migrate deploy` instead of `db push`, so it builds the
+   database exactly as production does. `docs/migration-baseline-squash.md` is
+   marked resolved — **do not run its 6-step runbook**, it resolves a problem
+   that does not exist and `migrate resolve --applied` against production's
+   `_prisma_migrations` on a misdiagnosis is not a harmless no-op.
 4. **Verify the ~18 production env vars** in the Vercel dashboard. The connector
    token here lacks `projectEnvVars` read permission (403), so presence, scope,
    format and rotation ownership are all still unverified.
@@ -469,4 +483,8 @@ are in the commit messages.
 | Dependencies | `prisma` → devDependencies, removing every high advisory from `--omit=dev` |
 | Lint | 19 errors → 0, and CI now runs it |
 | Registration | Non-affiliation acknowledgement gates account creation |
-| Tests | 43 → 55 passing, including the file that caught the `redactSensitiveText` bug |
+| Tests | 43 → **86 passing, 0 failing** with a real DB and Redis; includes the file that caught the `redactSensitiveText` bug |
+| Build | **Compiles.** First real `next build` of any of this work |
+| Types | 111 apparent errors → **0 actual errors** once the Prisma client generates |
+| Migrations | Replay from empty verified; CI moved to `migrate deploy`; both partial indexes asserted in CI |
+| Test isolation | `growth.test.ts` no longer fails on a second run / CI retry (per-run source IP) |
