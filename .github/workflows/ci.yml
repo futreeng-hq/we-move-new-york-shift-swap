@@ -77,28 +77,39 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - run: npx prisma generate
-      # db push + partial-indexes.sql, NOT migrate deploy.
+      # migrate deploy — production's actual path.
       #
-      # NOTE: the ordering explanation that used to be here was wrong, and so is
-      # the matching passage in docs/migration-baseline-squash.md. Prisma sorts
-      # migration directories lexicographically, and '2' (0x32) sorts before
-      # '_' (0x5F), so 20260401214939_init sorts FIRST — the 8-digit dirs do not
-      # jump ahead of the baseline, and applying all 16 in order against an
-      # empty database succeeds through the first 15.
+      # This job used `db push` + partial-indexes.sql for a long time, on the
+      # belief that the history could not replay from scratch because the
+      # hand-named 8-digit dirs sorted ahead of the 14-digit baseline. That was
+      # wrong twice over. Prisma sorts lexicographically and '2' (0x32) precedes
+      # '_' (0x5F), so 20260401214939_init sorts FIRST. The real blocker was
+      # 20260704_drop_unused_audit_action running a bare DROP TYPE on a type no
+      # migration creates; it is now DROP TYPE IF EXISTS.
       #
-      # The actual blocker was 20260704_drop_unused_audit_action, which dropped
-      # a type no migration ever creates (it exists in production only as
-      # pre-migration drift). Fixed with DROP TYPE IF EXISTS. Once that fix has
-      # been rehearsed against an empty database, this job should move to
-      # `migrate deploy` so CI exercises production's real path.
+      # Verified 2026-09-25: all 16 migrations apply cleanly to an empty
+      # Postgres 16 in this order, and both partial unique indexes are present
+      # afterwards (they come from 20260704_trust_v2).
       #
-      # db push builds the full schema, then partial-indexes.sql adds the two
-      # partial unique indexes db push cannot express. Without them the conflict
-      # tests return 201 instead of 409. See prisma/partial-indexes.sql. Note
-      # this also means CI's constraints are not identical to production's, so
-      # the indexes must be verified in the deployed database separately.
-      - run: npx prisma db push --accept-data-loss
-      - run: npx prisma db execute --file prisma/partial-indexes.sql
+      # This matters beyond tidiness. Under db push, CI's constraints were not
+      # the same as production's — db push cannot express a partial unique
+      # index, so the conflict tests were passing against a schema that differed
+      # from the real one. Now CI builds the database exactly as production does.
+      - run: npx prisma migrate deploy
+
+      # The 409 duplicate-proposal path depends entirely on these two indexes,
+      # and their absence is silent — the tests return 201 instead of 409, which
+      # reads as a logic regression rather than a missing constraint. Assert
+      # them explicitly so a migration that drops one fails here.
+      - name: Assert partial unique indexes exist
+        run: |
+          count=$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND indexdef ILIKE '%UNIQUE%' AND indexdef ILIKE '%WHERE%';")
+          echo "partial unique indexes found: $count"
+          if [ "$count" -ne 2 ]; then
+            echo "::error::expected 2 partial unique indexes (see prisma/partial-indexes.sql), found $count"
+            psql "$DATABASE_URL" -c "SELECT indexname FROM pg_indexes WHERE schemaname='public';"
+            exit 1
+          fi
 
       - name: Start Redis REST test adapter
         run: |

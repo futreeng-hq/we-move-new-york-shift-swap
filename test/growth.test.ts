@@ -179,11 +179,17 @@ test("attribution: wmny_src cookie stamps signupSource on register (allowlisted)
   const { POST } = await import("../app/api/auth/register/route");
   const tag = `gr${randomUUID().slice(0, 6)}`;
   const { depot, mk } = await seed(c, tag);
+  // Register is rate-limited to 5/hour PER IP, and the limiter's Redis state
+  // outlives a single `npm test`. With a hardcoded IP this test passed on a
+  // fresh Redis and then failed with an opaque 429 on the second run against
+  // the same one — including a CI job retry. A unique source IP per run keeps
+  // the bucket to this test's own 3 registrations.
+  const srcIp = `198.51.100.${1 + Math.floor(Math.random() * 250)}`;
   const register = async (emailLocal: string, cookie?: string) => {
     const code = `INV${randomUUID().slice(0, 6).toUpperCase()}`;
     const inviter = await mk(`inv-${emailLocal}`);
     await c.prisma.inviteCode.create({ data: { code, createdBy: inviter.id, isValid: true } });
-    const headers: Record<string, string> = { "content-type": "application/json", "x-forwarded-for": "203.0.113.9" };
+    const headers: Record<string, string> = { "content-type": "application/json", "x-forwarded-for": srcIp };
     if (cookie) headers.cookie = cookie;
     const res = await POST(new c.NextRequest("http://localhost/api/auth/register", {
       method: "POST", headers,

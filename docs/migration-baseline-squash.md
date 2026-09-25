@@ -47,9 +47,20 @@ P3018 records the migration as **failed** in `_prisma_migrations`, which then bl
 > depends on. So a fresh environment did not merely lack a 409; its agreement
 > flow did not work at all.
 >
-> Fixed by changing that one statement to `DROP TYPE IF EXISTS`. Re-rehearse
-> `migrate deploy` against an empty database before deciding whether this squash
-> is still needed — it may no longer be.
+> Fixed by changing that one statement to `DROP TYPE IF EXISTS`.
+>
+> **Rehearsed 2026-09-25: this squash is no longer needed.** All 16 migrations
+> apply cleanly, in order, to an empty Postgres 16, and both partial unique
+> indexes are present afterwards (they come from `20260704_trust_v2`, which the
+> P3009 block had been preventing from ever running). CI has been switched from
+> `db push` to `migrate deploy` accordingly, so it now builds the database
+> exactly as production does — under `db push` its constraints were not the same
+> as production's, because `db push` cannot express a partial unique index.
+>
+> The rest of this document is kept for history. Do not run the 6-step runbook
+> below; it resolves a problem that does not exist, and `migrate resolve
+> --applied` against production's `_prisma_migrations` on a misdiagnosis is not
+> a harmless no-op.
 
 ~~Prisma orders migrations by the numeric prefix of the directory name. Actual apply order today:~~
 
