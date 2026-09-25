@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { ok, err } from "@/lib/apiResponse";
+import { ok } from "@/lib/apiResponse";
 
 // Returns all swaps the user is involved in (any status, sorted newest first):
 //   - swaps the user posted (the user is the swap's userId)

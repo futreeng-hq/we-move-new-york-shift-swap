@@ -34,7 +34,7 @@ export default function PrivacyPage() {
 
         <div style={s.section}>
           <h2 style={s.h2}>1. Overview</h2>
-          <p style={s.p}>We Move New York ("WMNY," "we," "us") is committed to protecting your privacy. This Privacy Policy explains what information we collect, how we use it, and your rights regarding your data. WMNY is not affiliated with, endorsed by, or operated by TWU Local 100, the MTA, NYCT, or any labor union. By using the App, you agree to the practices described in this policy.</p>
+          <p style={s.p}>We Move New York (&ldquo;WMNY,&rdquo; &ldquo;we,&rdquo; &ldquo;us&rdquo;) is committed to protecting your privacy. This Privacy Policy explains what information we collect, how we use it, and your rights regarding your data. WMNY is not affiliated with, endorsed by, or operated by TWU Local 100, the MTA, NYCT, or any labor union. By using the App, you agree to the practices described in this policy.</p>
         </div>
 
         <hr style={s.divider} />

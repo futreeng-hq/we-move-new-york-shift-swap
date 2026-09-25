@@ -55,6 +55,7 @@ export default function OnboardingChecklist({ userId, depotCode }: Props) {
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reads localStorage, which is unavailable during SSR, so it must happen after mount
     setState(getChecklistState(userId));
     if (typeof window !== "undefined" && localStorage.getItem(`ob-dismissed-${userId}`)) {
       setDismissed(true);

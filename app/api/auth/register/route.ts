@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
   const passwordHash = await bcrypt.hash(password, 10);
   const verifyToken = crypto.randomBytes(32).toString("hex");
 
-  let newCodes: string[] = [];
+  const newCodes: string[] = [];
   let user;
 
   {

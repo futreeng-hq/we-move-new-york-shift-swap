@@ -66,7 +66,6 @@ export async function PATCH(req: NextRequest) {
 
   const updated = await prisma.user.update({
     where: { id: userId },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     data: {
       ...(role !== undefined && { role }),
       ...(depotId !== undefined && {

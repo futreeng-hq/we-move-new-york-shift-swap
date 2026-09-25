@@ -51,6 +51,7 @@ export default function LoginPage() {
   const [err, setErr] = useState(""); const [fieldErrs, setFieldErrs] = useState<Record<string, string>>({});
   const [shaking, setShaking] = useState(false); const [submitting, setSubmitting] = useState(false);
   const [showConsentFlow, setShowConsentFlow] = useState(false);
+  const [regAck, setRegAck] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
   const [termsChecked, setTermsChecked] = useState(false);
   const [acceptingTerms, setAcceptingTerms] = useState(false);
@@ -92,6 +93,7 @@ export default function LoginPage() {
     if (!pw2) errs.pw2 = "Required";
     else if (pw !== pw2) errs.pw2 = "Passwords don't match";
     if (!invCode.trim()) errs.inv = "Required — ask a fellow operator";
+    if (!regAck) errs.ack = "Please confirm you understand this before creating an account";
     setFieldErrs(errs);
     return Object.keys(errs).length === 0;
   };
@@ -341,6 +343,26 @@ export default function LoginPage() {
                 : <div style={{ fontSize: 11, color: C.m, marginTop: 4 }}>Ask a fellow operator for their invite code</div>
               }
             </div>
+            {/* Non-affiliation acknowledgement, gating account creation.
+                The full consent modal and Terms screen fire on first SIGN-IN,
+                i.e. after the account already exists, so this is what makes the
+                disclosure land *before* it — a launch requirement. Wording is
+                the canonical sentence, verbatim. */}
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "12px 14px", borderRadius: 12, background: "rgba(255,255,255,.03)", border: `1px solid ${regAck ? "rgba(209,173,56,.4)" : fieldErrs.ack ? C.red + "88" : "rgba(255,255,255,.08)"}` }}>
+              <input
+                id="reg-ack"
+                type="checkbox"
+                checked={regAck}
+                onChange={e => { setRegAck(e.target.checked); setFieldErrs(p => ({ ...p, ack: "" })); }}
+                style={{ width: 18, height: 18, marginTop: 1, accentColor: C.gold, flexShrink: 0, cursor: "pointer" }}
+              />
+              <label htmlFor="reg-ack" style={{ fontSize: 12.5, color: "rgba(255,255,255,.75)", lineHeight: 1.55, cursor: "pointer" }}>
+                I understand that <strong style={{ color: C.white }}>We Move NY is not affiliated with, endorsed by, or operated by TWU Local 100 or the MTA</strong>, and that swap agreements are between operators only. I am responsible for making sure any swap complies with my collective bargaining agreement and depot rules.{" "}
+                <a href="/terms" style={{ color: C.gold, textDecoration: "underline" }}>Terms</a>{" · "}
+                <a href="/privacy" style={{ color: C.gold, textDecoration: "underline" }}>Privacy</a>
+              </label>
+            </div>
+            {fieldErrs.ack && <div style={{ fontSize: 11, color: C.red, marginTop: -6 }}>{fieldErrs.ack}</div>}
             <MagneticButton onClick={doRegister} disabled={submitting} style={{ padding: 16, borderRadius: 14, border: "none", cursor: "pointer", background: `linear-gradient(135deg,${C.gold},${C.gold}dd)`, fontSize: 16, fontWeight: 700, color: C.bg, opacity: submitting ? 0.7 : 1, width: "100%" }}>
               {submitting ? "Creating account..." : "Create Account →"}
             </MagneticButton>

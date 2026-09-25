@@ -65,7 +65,12 @@ export async function POST(req: NextRequest) {
     {
       category: "message",
       title: "Someone is interested in your swap",
-      body: `${senderName}: ${text.trim().slice(0, 100)}`,
+      // Deliberately does NOT include the message text. This body is handed
+      // to showNotification() in public/sw.js, so it renders on the lock
+      // screen — 100 characters of a private message plus the sender's full
+      // name were readable on a shared or borrowed phone. The text is one tap
+      // away behind url.
+      body: `${senderName} sent you a message`,
       url: threadUrl,
     },
     `New message from ${safeSenderName}`,

@@ -94,6 +94,7 @@ export default function RepDashboardPage() {
   useEffect(() => {
     if (!user) return;
     if (user.role !== "depotRep" && user.role !== "admin") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- role guard: the check needs the loaded user, so the state can only be set after render
       setError("Access restricted to depot reps and admins.");
       return;
     }

@@ -34,7 +34,7 @@ export default function TermsPage() {
 
         <div style={s.section}>
           <h2 style={s.h2}>1. Acceptance of Terms</h2>
-          <p style={s.p}>By accessing or using We Move New York ("the App," "WMNY"), you agree to be bound by these Terms of Use. If you do not agree to these terms, do not use the App. These terms apply to all users of the platform.</p>
+          <p style={s.p}>By accessing or using We Move New York (&ldquo;the App,&rdquo; &ldquo;WMNY&rdquo;), you agree to be bound by these Terms of Use. If you do not agree to these terms, do not use the App. These terms apply to all users of the platform.</p>
         </div>
 
         <hr style={s.divider} />

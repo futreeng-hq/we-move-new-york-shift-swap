@@ -5,6 +5,7 @@ import { ok, err } from "@/lib/apiResponse";
 import { notifyMany, notifyUser } from "@/lib/notifyUser";
 import { nyToday } from "@/lib/nyDate";
 import { pingHeartbeat } from "@/lib/heartbeat";
+import { claimDailyRun } from "@/lib/cronOnce";
 
 // Runs daily — notifies owners and interested users about swaps expiring tomorrow
 // Cron work is unbounded in row count. Without an explicit ceiling the
@@ -16,6 +17,13 @@ export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   const auth = req.headers.get("authorization");
   if (!secret || auth !== `Bearer ${secret}`) return err("Unauthorized", 401);
+
+  // Vercel cron delivery is at-least-once, and this handler sends
+  // notifications — a retry would notify every recipient twice.
+  if (!await claimDailyRun("expiring-soon")) {
+    await pingHeartbeat("expiring-soon");
+    return ok({ skipped: "already ran today" });
+  }
 
   try {
   // Compute "tomorrow" in NYC time (America/New_York) so the window aligns with

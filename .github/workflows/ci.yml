@@ -17,6 +17,10 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - run: npx prisma generate
+      # Lint was never in CI, so `npm run lint` had accumulated 19 errors
+      # unnoticed. It is clean now; --max-warnings 10 in the script holds the
+      # line at the current warning count so new ones fail the build.
+      - run: npm run lint
       - run: npm run build
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

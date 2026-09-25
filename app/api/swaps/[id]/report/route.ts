@@ -7,6 +7,7 @@ import { ok, err } from "@/lib/apiResponse";
 import { parseBody, BODY_2KB } from "@/lib/parseBody";
 import { sendEmail } from "@/lib/email";
 import { escapeHtml } from "@/lib/escapeHtml";
+import { getAppUrl } from "@/lib/appUrl";
 import { checkSwapAccess } from "@/lib/accessScope";
 
 export async function POST(
@@ -70,7 +71,9 @@ export async function POST(
     const reasonText = reason?.trim() ? reason.trim() : "(no reason given)";
     const detailsSnippet = swap.details.slice(0, 200);
     const reportedAt = new Date().toUTCString();
-    const reportsUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/admin?tab=reports`;
+    // getAppUrl() falls back to VERCEL_URL on preview; reading the env var
+    // directly with ?? "" produced a relative, dead link there.
+    const reportsUrl = `${getAppUrl() ?? ""}/admin?tab=reports`;
 
     const subject = `New report on We Move NY (swap ${id})`;
     const html = `

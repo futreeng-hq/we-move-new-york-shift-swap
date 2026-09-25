@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { ok, err } from "@/lib/apiResponse";
+import { ok } from "@/lib/apiResponse";
 
 // PATCH /api/notifications/:id  → mark one notification as read
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

@@ -5,6 +5,7 @@ import { ok, err } from "@/lib/apiResponse";
 import { notifyMany } from "@/lib/notifyUser";
 import { getPrefsMany } from "@/lib/notificationPrefs";
 import { pingHeartbeat } from "@/lib/heartbeat";
+import { claimDailyRun } from "@/lib/cronOnce";
 
 // Runs every morning at 12:00 UTC = 8 AM EDT / 7 AM EST — sends each subscribed operator a summary of
 // new open swaps posted in their depot in the last 24 hours.
@@ -24,6 +25,13 @@ export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   const auth = req.headers.get("authorization");
   if (!secret || auth !== `Bearer ${secret}`) return err("Unauthorized", 401);
+
+  // Vercel cron delivery is at-least-once, and this handler sends
+  // notifications — a retry would notify every recipient twice.
+  if (!await claimDailyRun("daily-digest")) {
+    await pingHeartbeat("daily-digest");
+    return ok({ skipped: "already ran today" });
+  }
 
   try {
     const since = new Date(Date.now() - 86_400_000);
