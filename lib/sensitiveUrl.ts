@@ -32,6 +32,25 @@ export function redactSensitivePath(pathname: string): string {
   return prefix ? `${prefix}/[redacted]` : pathname;
 }
 
+/**
+ * Redacts credential-bearing paths found ANYWHERE inside free text.
+ *
+ * redactSensitiveUrl() only works when the whole string is a URL or a path. An
+ * error message like "failed at https://host/reset-password/<jwt>" is neither,
+ * so it parsed as garbage and came back untouched — which is how a reset JWT
+ * would still have reached Sentry through event.message and exception values.
+ * Use this for anything that merely *contains* a URL.
+ */
+export function redactSensitiveText(text: string): string {
+  let out = text;
+  for (const prefix of SENSITIVE_PATH_PREFIXES) {
+    // Everything up to the next character that cannot appear in a path segment.
+    const re = new RegExp(`(${prefix})/[^\\s"'<>)\\]}]+`, "g");
+    out = out.replace(re, "$1/[redacted]");
+  }
+  return out;
+}
+
 /** Same, for an absolute URL. Query and fragment are dropped entirely. */
 export function redactSensitiveUrl(url: string): string {
   try {

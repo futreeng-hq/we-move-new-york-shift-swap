@@ -1,4 +1,4 @@
-import { redactSensitiveUrl } from "@/lib/sensitiveUrl";
+import { redactSensitiveUrl, redactSensitiveText } from "@/lib/sensitiveUrl";
 
 /**
  * Shared Sentry beforeSend scrubbing for the client, server and edge configs.
@@ -55,11 +55,11 @@ export function scrubEvent<T extends Record<string, unknown>>(event: T): T {
 
   // A Prisma validation error embeds the failing `data` object — including
   // passwordHash — in its message, which no key-based scrubber can see.
-  if (typeof e.message === "string") e.message = redactSensitiveUrl(e.message);
+  if (typeof e.message === "string") e.message = redactSensitiveText(e.message);
   const exception = e.exception as { values?: Array<{ value?: string }> } | undefined;
   if (exception?.values) {
     for (const v of exception.values) {
-      if (typeof v.value === "string") v.value = redactSensitiveUrl(v.value);
+      if (typeof v.value === "string") v.value = redactSensitiveText(v.value);
     }
   }
 
