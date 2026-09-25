@@ -42,8 +42,16 @@ export async function PUT(req: NextRequest) {
 
   // Invalidate all existing sessions on password change. The current session
   // will need to refresh, but that's a small price for the security guarantee
-  // that no stolen tokens survive a password change.
-  await blockUserAccessTokens(user.userId);
+  // that no stolen tokens survive a password change. Refresh tokens are not
+  // bound to the password hash, so if this marker cannot be written the
+  // guarantee does not hold and we must not claim success.
+  const revoked = await blockUserAccessTokens(user.userId);
+  if (!revoked) {
+    return err(
+      "Your password was changed, but we could not sign out your other devices. Please try signing out everywhere again in a moment.",
+      503,
+    );
+  }
 
   return ok({ message: "Password updated" });
 }

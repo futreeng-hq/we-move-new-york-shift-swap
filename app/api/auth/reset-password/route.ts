@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import * as Sentry from "@sentry/nextjs";
 import { prisma } from "@/lib/prisma";
-import { verifyResetToken } from "@/lib/auth";
+import { verifyResetToken, checkActive } from "@/lib/auth";
 import { ok, err } from "@/lib/apiResponse";
 import { rateLimitByIp, clientIp } from "@/lib/rateLimit";
 import { parseBody, BODY_2KB } from "@/lib/parseBody";
@@ -53,14 +53,27 @@ export async function POST(req: NextRequest) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return err("User not found", 404);
 
+  // A reset link minted before the account was deleted or suspended must not
+  // resurrect it. Same guard every write route applies.
+  const inactive = checkActive(user);
+  if (inactive) return err(inactive, 403);
+
   const passwordHash = await bcrypt.hash(newPassword, 10);
   await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
 
-  // Invalidate all existing sessions — user reset password because they
-  // suspect their account was compromised. Force-logout cuts off any
-  // stolen access tokens (15min remaining lifetime). The next refresh
-  // attempt by an attacker will fail because we just bumped the password.
-  await blockUserAccessTokens(userId);
+  // Invalidate all existing sessions — the user reset their password because
+  // they suspect the account was compromised, so force-logout must cut off
+  // both stolen access tokens (up to 15 min of remaining life) and stolen
+  // refresh tokens (up to 7 days). Refresh tokens are NOT bound to the
+  // password hash, so this marker is the only thing that stops them: if the
+  // write did not land we must not report success.
+  const revoked = await blockUserAccessTokens(userId);
+  if (!revoked) {
+    return err(
+      "Your password was changed, but we could not sign out your other devices. Please try signing out everywhere again in a moment.",
+      503,
+    );
+  }
 
   return ok({ message: "Password updated successfully" });
 }

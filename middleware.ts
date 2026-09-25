@@ -49,10 +49,17 @@ export async function middleware(req: NextRequest) {
     !pathname.startsWith("/api/auth/reset-password") &&
     !pathname.startsWith("/api/cron/")
   ) {
-    const token = req.cookies.get("accessToken")?.value
-      ?? (req.headers.get("authorization")?.startsWith("Bearer ")
-        ? req.headers.get("authorization")!.slice(7)
-        : null);
+    // MUST match lib/auth.ts getTokenFromRequest exactly, including the
+    // truthiness fallback. `??` would NOT fall through on an empty cookie
+    // value, so a request carrying `Cookie: accessToken=` plus a Bearer
+    // header would pick "" here, skip the force-logout check below, and
+    // still authenticate in the route via getTokenFromRequest — defeating
+    // logout-all, password reset, suspension and role demotion for the
+    // token's full 15-minute life.
+    const cookieToken = req.cookies.get("accessToken")?.value;
+    const authHeader = req.headers.get("authorization");
+    const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    const token = cookieToken || bearerToken;
     if (token) {
       const payload = decodeJwtPayload(token);
       if (payload?.userId && payload?.iat) {

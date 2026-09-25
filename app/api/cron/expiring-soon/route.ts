@@ -29,7 +29,10 @@ export async function GET(req: NextRequest) {
     const snippet = swap.details.substring(0, 60);
 
     // Notify swap owner
-    notifyUser(swap.userId, {
+    // Must be awaited: the serverless instance is frozen the moment the
+    // response is returned, so a floating promise here is silently dropped
+    // and the cron still reports 200 + pings the heartbeat.
+    await notifyUser(swap.userId, {
       category: "swap_updates",
       title: "Your swap expires tomorrow",
       body: `"${snippet}" — fill it or repost before it expires`,
@@ -44,7 +47,7 @@ export async function GET(req: NextRequest) {
     });
     const ids = interested.map(m => m.fromUserId);
     if (ids.length > 0) {
-      notifyMany(ids, {
+      await notifyMany(ids, {
         category: "swap_updates",
       title: "Swap expiring tomorrow",
         body: `"${snippet}" — reach out now before it's gone`,
