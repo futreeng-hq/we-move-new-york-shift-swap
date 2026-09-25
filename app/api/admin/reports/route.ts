@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { parseBody, BODY_1KB } from "@/lib/parseBody";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function GET(req: NextRequest) {
   let user;
@@ -43,12 +44,31 @@ export async function PATCH(req: NextRequest) {
   const report = await prisma.report.findUnique({ where: { id: reportId } });
   if (!report) return err("Report not found", 404);
 
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? undefined;
+
   if (action === "remove") {
-    // Delete the reported swap (cascades to messages, agreements, reviews, reports)
+    // Hard delete cascades to messages, agreements, reviews and reports — the
+    // most destructive action in the app, and irreversible. Restricted to full
+    // admins: a subAdmin cannot see user emails but could previously erase a
+    // whole swap's evidence trail.
+    if (dbUser.role !== "admin") {
+      return err("Only a full admin can remove a reported swap", 403);
+    }
     await prisma.swap.delete({ where: { id: report.swapId } });
   } else {
     await prisma.report.update({ where: { id: reportId }, data: { status: "dismissed" } });
   }
+
+  // Both branches are moderation decisions and must leave a trail; neither was
+  // logged before, while far less consequential role changes were.
+  writeAuditLog({
+    adminId: user.userId,
+    action: action === "remove" ? "report_remove_swap" : "report_dismiss",
+    targetId: report.swapId,
+    targetType: "swap",
+    detail: `report ${reportId} → ${action}`,
+    ip,
+  });
 
   return ok({ ok: true });
 }

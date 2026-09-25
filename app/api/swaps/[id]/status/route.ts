@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, checkActive } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { notifyMany } from "@/lib/notifyUser";
@@ -21,6 +21,16 @@ export async function PUT(
   const { status } = body as { status: string };
 
   if (!VALID.includes(status as Status)) return err("Invalid status", 400);
+
+  // Suspension must hold on every write path, not just at login — a suspended
+  // owner holding a live access token could otherwise still flip swap status.
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.userId },
+    select: { email: true, suspendedUntil: true },
+  });
+  if (!dbUser) return err("User not found", 404);
+  const activeErr = checkActive(dbUser);
+  if (activeErr) return err(activeErr, 403);
 
   const swap = await prisma.swap.findUnique({ where: { id } });
   if (!swap) return err("Swap not found", 404);

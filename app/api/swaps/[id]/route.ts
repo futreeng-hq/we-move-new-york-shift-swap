@@ -200,6 +200,16 @@ export async function DELETE(
   try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
   const { id } = await params;
 
+  // Deleting a swap with a live agreement dings reputation and notifies the
+  // counterparty, so it is a write path and suspension must hold here too.
+  const deleter = await prisma.user.findUnique({
+    where: { id: user.userId },
+    select: { email: true, suspendedUntil: true },
+  });
+  if (!deleter) return err("User not found", 404);
+  const deleteActiveErr = checkActive(deleter);
+  if (deleteActiveErr) return err(deleteActiveErr, 403);
+
   const swap = await prisma.swap.findUnique({ where: { id } });
   if (!swap) return err("Swap not found", 404);
   if (swap.userId !== user.userId) return err("Not authorized", 403);

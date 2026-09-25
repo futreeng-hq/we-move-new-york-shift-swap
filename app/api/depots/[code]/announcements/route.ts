@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, checkActive } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { parseBody, BODY_4KB } from "@/lib/parseBody";
@@ -14,6 +14,18 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ code
   const { code } = await params;
   const depot = await prisma.depot.findUnique({ where: { code } });
   if (!depot) return err("Depot not found", 404);
+
+  // Announcement bodies are internal depot communications and carry the
+  // author's full name; reading them required only a login, so any account
+  // could read every depot's notices.
+  const caller = await prisma.user.findUnique({
+    where: { id: user.userId },
+    select: { depotId: true, role: true },
+  });
+  if (!caller) return err("User not found", 404);
+  if (caller.role !== "admin" && caller.depotId !== depot.id) {
+    return err("Depot not found", 404);
+  }
 
   const now = new Date();
   const announcements = await prisma.announcement.findMany({
@@ -39,6 +51,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cod
   const dbUser = await prisma.user.findUnique({ where: { id: user.userId } });
   if (!dbUser) return err("User not found", 404);
   if (dbUser.role !== "depotRep" && dbUser.role !== "admin") return err("Only depot reps can post announcements", 403);
+  // A suspended depotRep could otherwise still push a notice to the whole depot.
+  const postActiveErr = checkActive(dbUser);
+  if (postActiveErr) return err(postActiveErr, 403);
 
   const { code } = await params;
   const depot = await prisma.depot.findUnique({ where: { code } });

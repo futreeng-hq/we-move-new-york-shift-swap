@@ -5,6 +5,7 @@ import { rateLimit } from "@/lib/rateLimit";
 import { ok, err } from "@/lib/apiResponse";
 import { notifyUserWithEmailFallback } from "@/lib/notifyUser";
 import { parseBody, BODY_4KB } from "@/lib/parseBody";
+import { checkSwapAccess } from "@/lib/accessScope";
 import { escapeHtml } from "@/lib/escapeHtml";
 
 export async function GET(req: NextRequest) {
@@ -41,16 +42,11 @@ export async function POST(req: NextRequest) {
   if (!swap) return err("Swap not found", 404);
   if (swap.userId === user.userId) return err("Cannot message yourself", 400);
 
-  const block = await prisma.block.findFirst({
-    where: {
-      OR: [
-        { blockerId: user.userId, blockedId: swap.userId },
-        { blockerId: swap.userId, blockedId: user.userId },
-      ],
-    },
-    select: { id: true },
-  });
-  if (block) return err("Unable to send message", 403);
+  // Depot scoping plus the symmetric block check. The direct-message route
+  // enforces the depot explicitly to prevent cross-depot harassment; sending
+  // via a swap id must not be a way around it.
+  const denied = await checkSwapAccess(user.userId, swap);
+  if (denied) return err(denied.message, denied.status);
 
   const [message, sender, depot] = await Promise.all([
     prisma.message.create({
