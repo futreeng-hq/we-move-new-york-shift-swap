@@ -10,6 +10,7 @@ import DepotBadge from "@/components/ui/DepotBadge";
 import Icon from "@/components/ui/Icon";
 import Toast from "@/components/ui/Toast";
 import NotifIcon from "@/components/ui/NotifIcon";
+import { parseSwapDate } from "@/lib/swapDate";
 import InboxIcon from "@/components/ui/InboxIcon";
 import TimePicker from "@/components/ui/TimePicker";
 import { playClick, playSuccess } from "@/lib/sound";
@@ -72,8 +73,10 @@ function isPastDateTime(dateStr: string, timeStr?: string): boolean {
   return h < now.getHours() || (h === now.getHours() && m <= now.getMinutes());
 }
 function getDayFromDate(dateStr: string): string {
-  if (!dateStr) return "";
-  const d = new Date(dateStr + "T12:00");
+  // The form's own <input type="date"> yields "YYYY-MM-DD", but this also runs
+  // against values round-tripped from the API, which are full ISO instants.
+  const d = parseSwapDate(dateStr);
+  if (!d) return "";
   return DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1] ?? "";
 }
 

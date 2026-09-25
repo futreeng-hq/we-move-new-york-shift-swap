@@ -16,6 +16,7 @@ import AgreementPanel from "@/components/ui/AgreementPanel";
 import TimePicker from "@/components/ui/TimePicker";
 import { timeAgo, fmtTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { formatSwapDate } from "@/lib/swapDate";
 
 export default function SwapDetailPage() {
   const { user, loading } = useAuth();
@@ -258,13 +259,13 @@ export default function SwapDetailPage() {
               <div style={{ padding: 16, borderRadius: 14, background: C.gs, border: "1px solid " + C.gg }}>
                 <div style={{ fontSize: 10, color: C.gold, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Swapping From</div>
                 <div style={{ fontSize: 20, fontWeight: 800, color: C.white }}>{swap.fromDay || "—"}</div>
-                {swap.fromDate && <div style={{ fontSize: 12, color: C.m, marginTop: 4 }}>{new Date(swap.fromDate + "T12:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</div>}
+                {swap.fromDate && <div style={{ fontSize: 12, color: C.m, marginTop: 4 }}>{formatSwapDate(swap.fromDate, { month: "long", day: "numeric", year: "numeric" })}</div>}
               </div>
               <div style={{ display: "flex", alignItems: "center" }}><Icon n="swap" s={20} c={C.m} /></div>
               <div style={{ padding: 16, borderRadius: 14, background: C.blue + "12", border: "1px solid " + C.blue + "22" }}>
                 <div style={{ fontSize: 10, color: C.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Swapping To</div>
                 <div style={{ fontSize: 20, fontWeight: 800, color: C.white }}>{swap.toDay || "—"}</div>
-                {swap.toDate && <div style={{ fontSize: 12, color: C.m, marginTop: 4 }}>{new Date(swap.toDate + "T12:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</div>}
+                {swap.toDate && <div style={{ fontSize: 12, color: C.m, marginTop: 4 }}>{formatSwapDate(swap.toDate, { month: "long", day: "numeric", year: "numeric" })}</div>}
               </div>
             </div>
           </div>

@@ -10,6 +10,7 @@ import { playClick, playChime } from "@/lib/sound";
 import { useAuth } from "@/lib/AuthContext";
 import { useT } from "@/lib/i18n";
 import { analytics } from "@/lib/analytics";
+import { formatSwapDate } from "@/lib/swapDate";
 
 interface Props {
   swap: Swap;
@@ -53,8 +54,8 @@ function SwapSummary({ swap }: { swap: Swap }) {
     if (swap.startTime) lines.push(`Start ${swap.startTime}`);
     if (swap.clearTime) lines.push(`Clear ${swap.clearTime}`);
   } else if (swap.category === "daysoff") {
-    if (swap.fromDay) lines.push(`Has: ${swap.fromDay}${swap.fromDate ? " " + new Date(swap.fromDate + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""}`);
-    if (swap.toDay) lines.push(`Wants: ${swap.toDay}${swap.toDate ? " " + new Date(swap.toDate + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""}`);
+    if (swap.fromDay) lines.push(`Has: ${swap.fromDay}${swap.fromDate ? " " + formatSwapDate(swap.fromDate) : ""}`);
+    if (swap.toDay) lines.push(`Wants: ${swap.toDay}${swap.toDate ? " " + formatSwapDate(swap.toDate) : ""}`);
   } else if (swap.category === "vacation") {
     if (swap.vacationHave) lines.push(`Has: ${swap.vacationHave}`);
     if (swap.vacationWant) lines.push(`Wants: ${swap.vacationWant}`);

@@ -9,6 +9,7 @@ import { CURRENT_TERMS_VERSION } from "@/lib/termsVersion";
 import { C } from "@/constants/colors";
 import Intro from "@/components/screens/Intro";
 import MagneticButton from "@/components/ui/MagneticButton";
+import { useIsomorphicLayoutEffect } from "@/lib/useIsomorphicLayoutEffect";
 
 const lb: React.CSSProperties = { display: "block", marginBottom: 8, fontSize: 12, fontWeight: 600, color: C.m, letterSpacing: 2, textTransform: "uppercase" };
 
@@ -32,21 +33,35 @@ export default function LoginPage() {
   const { login, user, loading } = useAuth();
   const router = useRouter();
 
-  const [showIntro, setShowIntro] = useState(() => {
-    if (typeof window === "undefined") return true;
-    return !sessionStorage.getItem("intro-seen");
-  });
-  const [mode, setMode] = useState<"signin" | "register">(() => {
-    if (typeof window === "undefined") return "signin";
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("invite")) return "register";
-    return "signin";
-  });
+  // These two initializers read browser-only state, so the server and the
+  // client's first render disagreed and React threw hydration error #418 on
+  // every returning visit (sessionStorage already has "intro-seen") and on
+  // every invite link (?invite= flips the tab to register). React then discards
+  // the server HTML and re-renders, which is both an error in the console and a
+  // visible flash of the wrong screen.
+  //
+  // The fix is to make the first client render match the server exactly, then
+  // correct it in a layout effect — which runs before the browser paints, so
+  // there is no flash. `useState(() => ...)` cannot do that; it runs during
+  // render, which is the whole problem.
+  const [showIntro, setShowIntro] = useState(true);
+  const [mode, setMode] = useState<"signin" | "register">("signin");
+
   const [em, setEm] = useState(""); const [pw, setPw] = useState("");
   const [fn, setFn] = useState(""); const [ln, setLn] = useState(""); const [pw2, setPw2] = useState("");
-  const [invCode, setInvCode] = useState(() =>
-    typeof window !== "undefined" ? (new URLSearchParams(window.location.search).get("invite") ?? "") : ""
-  );
+  // Same reason: prefilling from the query string during render is a third
+  // hydration mismatch, on the invite path specifically.
+  const [invCode, setInvCode] = useState("");
+
+  useIsomorphicLayoutEffect(() => {
+    try {
+      if (sessionStorage.getItem("intro-seen")) setShowIntro(false);
+    } catch { /* private mode / blocked storage: keep the intro */ }
+    try {
+      const invite = new URLSearchParams(window.location.search).get("invite");
+      if (invite) { setMode("register"); setInvCode(invite); }
+    } catch { /* malformed query string */ }
+  }, []);
   const [showPw, setShowPw] = useState(false); const [showPw2, setShowPw2] = useState(false);
   const [err, setErr] = useState(""); const [fieldErrs, setFieldErrs] = useState<Record<string, string>>({});
   const [shaking, setShaking] = useState(false); const [submitting, setSubmitting] = useState(false);

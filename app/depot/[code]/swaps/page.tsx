@@ -24,6 +24,7 @@ import OfflineBanner from "@/components/ui/OfflineBanner";
 import FeedbackButton from "@/components/ui/FeedbackButton";
 import { playClick } from "@/lib/sound";
 import { markChecklistItem } from "@/components/ui/OnboardingChecklist";
+import { parseSwapDate } from "@/lib/swapDate";
 
 export default function BrowsePage() {
   const { user, loading } = useAuth();
@@ -151,7 +152,7 @@ export default function BrowsePage() {
     let r = [...swaps];
     if (quickF === "am") r = r.filter(s => s.startTime && parseInt(s.startTime) < 12);
     if (quickF === "pm") r = r.filter(s => s.startTime && parseInt(s.startTime) >= 12);
-    if (quickF === "weekend") r = r.filter(s => s.fromDay === "Saturday" || s.fromDay === "Sunday" || s.toDay === "Saturday" || s.toDay === "Sunday" || (s.date && [0,6].includes(new Date(s.date + "T12:00").getDay())));
+    if (quickF === "weekend") r = r.filter(s => s.fromDay === "Saturday" || s.fromDay === "Sunday" || s.toDay === "Saturday" || s.toDay === "Sunday" || (s.date && [0,6].includes(parseSwapDate(s.date)?.getDay() ?? -1)));
     if (quickF === "thisweek") {
       const weekEnd = new Date(); weekEnd.setDate(weekEnd.getDate() + 7);
       const we = weekEnd.toISOString().split("T")[0];
