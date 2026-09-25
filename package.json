@@ -16,7 +16,8 @@
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "test:smoke": "node qa-smoke.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.6.0",
