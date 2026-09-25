@@ -4,7 +4,10 @@
 That document's blocker list is still the right list. This one records what has
 since been verified, what was found that it missed, and what is still open.
 
-**Decision: still NO-GO, but for a shorter and more specific list than before.**
+**Decision: every code-side item is now closed. What remains is deployment and
+the checks that can only be done in the live accounts — listed in §5.**
+
+Updated 2026-09-25 (second pass) after working through the full punch list.
 
 ---
 
@@ -84,13 +87,21 @@ across both issuers. `PRELAUNCH_AUDIT.md:115` and
 `AUDIT_ACTION_PLAN.md:104-108` describe the old `updatedAt`-only design and are
 **out of date** — do not reopen them.
 
-**Still open on B1:** revocation is enforced *only* in middleware.
-`requireUser()` does nothing but `jwt.verify`, so there is no second layer, and
-`app/s/[id]/page.tsx` is an authenticated path outside `/api/` that middleware's
-check does not cover. Moving the force-logout check into `requireUser()`, or
-adding a `tokenVersion` claim checked against the user row routes already fetch,
-is the durable fix. Recommended before launch; not included here because it
-touches every route's hot path and wants a test run behind it.
+**Fourth hole — now closed.** Revocation was enforced *only* in middleware;
+`requireUser()` did nothing but `jwt.verify`. That is one layer, and the wrong
+one: middleware had the extraction bug above for months, it does not run for
+authenticated work outside its matcher, and a Next.js middleware-bypass CVE
+would hand over every route at once.
+
+The check now lives in `requireUser()`, the layer that sits against the data.
+All 73 call sites await it, and `authError()` maps the failure to 401 (revoked)
+or 503 (cannot prove it — Redis absent or unreachable) instead of every route
+flattening both to "Unauthorized". Middleware keeps the check for page routes
+only, which have no `requireUser`, so a request still pays exactly one Redis
+round-trip rather than two. Middleware also now rejects any inbound request
+carrying `x-middleware-subrequest`, the header that class of bypass relies on —
+a real client never sends it, so refusing it does not depend on staying
+patched.
 
 ### B2 — blocking behaviour → **policy holds, but the coverage claim did not**
 
@@ -132,7 +143,7 @@ from a laptop.
 Note that 19 of those eslint problems are **errors**, so `npm run lint` fails
 today. CI runs build and test but not lint, which is why nobody noticed.
 
-### B4 — dependency audit → **closed, with reasoning**
+### B4 — dependency audit → **closed, and now closed structurally**
 
 `npm audit --omit=dev` reports 21 findings (8 high). Every one traces to build or
 CLI tooling, not the request path:
@@ -145,12 +156,14 @@ CLI tooling, not the request path:
 | `uuid` | `@sentry/nextjs` → `@sentry/webpack-plugin` | No — build-time plugin |
 | `brace-expansion` | `@sentry/nextjs` → bundler-plugin-core / `@fastify/otel` | No — build, and minimatch ReDoS is not on any input path |
 
-**No finding is reachable from a production request.** The cleanest structural
-fix is to move `prisma` from `dependencies` to `devDependencies`: it is only
-needed for `postinstall` generate and `vercel-build`'s `migrate deploy`, both of
-which run with devDependencies installed. That single change removes hono,
-mysql2 and valibot from `--omit=dev` entirely. Not done here because it changes
-install behaviour and wants one verified Vercel build behind it.
+**No finding is reachable from a production request.** `prisma` has now been
+moved from `dependencies` to `devDependencies` — it is only needed by
+`postinstall` generate and `vercel-build`'s `migrate deploy`, both of which run
+with devDependencies installed — which removes hono, mysql2 and valibot from the
+`--omit=dev` surface entirely. Confirm this on the first Vercel build: if
+anything at runtime turns out to import the `prisma` CLI package (nothing should;
+`@prisma/client` is a separate, still-production dependency), that build will
+say so.
 
 Do **not** run `npm audit fix --force` — it downgrades to `prisma@6.19.3`.
 
@@ -276,18 +289,18 @@ login card had a variant at 11px / 35% opacity on `#010028`, below WCAG
 contrast. The consent modal omitted TWU Local 100 entirely. Both fixed in
 patch 0003.
 
-**Still open (product decision, not a code fix):** the consent modal and Terms
-gate fire on first *sign-in*, not before `POST /auth/register` —
-`doRegister` goes straight to "Check your email." So the substantive disclosure
-happens *after* the account exists. Moving the gate ahead of registration is a
-flow change and needs your call.
+**Also closed:** the consent modal and Terms gate fire on first *sign-in*, not
+before `POST /auth/register`, so the substantive disclosure landed *after* the
+account existed. Rather than restructure that flow (the Terms screen writes to
+the user record, so it needs a logged-in user), registration now gates on its
+own acknowledgement checkbox carrying the canonical sentence verbatim. The
+post-sign-in flow is untouched.
 
 ---
 
 ## 3. The patches
 
-Four commits, one per phase, on branch
-`fix/launch-blockers-session-revocation`. 44 files, +785/−180.
+Seven commits on branch `fix/launch-blockers-session-revocation`, one per phase.
 
 | # | Scope |
 |---|---|
@@ -295,10 +308,36 @@ Four commits, one per phase, on branch
 | 0002 | Depot + block scoping, `checkActive`, admin/reports |
 | 0003 | Token redaction in analytics/Sentry, disclosure copy |
 | 0004 | Cron visibility, EST/DST tests, env gating, health, docs |
+| 0005 | This record |
+| 0006 | Revocation moved into `requireUser()`; login/register/rate-limit/profile hardening |
+| 0007 | Disputes queue, cron idempotency, dependency + lint hygiene, registration gate |
+| 0008 | Tests for the redaction, scrubbing and IP-validation fixes |
 
-**These were not built or run against a database.** `tsc --noEmit` and `eslint`
-are byte-identical to the pre-change baseline and the pure test subset passes,
-but a real `next build` and a CI run with the Postgres service are the gate.
+### What has actually been verified here
+
+| Check | Result |
+|---|---|
+| `npm run test:concurrent` | **55 passed, 0 failed, 24 skipped** (was 43 passed) |
+| `npm run lint` | **0 errors, 10 warnings** — was 19 errors, and now gates CI |
+| `tsc --noEmit` | 111 errors, **identical to the pre-change baseline** |
+
+All 111 remaining type errors are the same pre-existing class: implicit `any`
+from the un-generated Prisma client. They resolve when `prisma generate` runs.
+
+**What has NOT been verified:** `next build` never ran, and neither did the 24
+DB/Redis-backed tests. `binaries.prisma.sh` is blocked by egress policy in the
+environment this session runs in, so `prisma generate` fails and everything
+downstream of it is unreachable. **A green CI run on this branch is the gate** —
+CI has the Postgres service, the Redis REST adapter, and canary assertions that
+fail the job if those tests silently skip.
+
+Worth knowing how much the one test file earned: writing
+`test/sensitiveUrl.test.ts` found a live bug in patch 0003. `scrubEvent` applied
+`redactSensitiveUrl()` to `event.message`, but that function parses its input
+*as* a URL — so `"failed at https://host/reset-password/<jwt>"` fell through and
+came back untouched, and the token would still have reached Sentry by that route.
+Fixed with `redactSensitiveText()` in patch 0008. Treat the remaining unbuilt,
+un-DB-tested surface with the same suspicion.
 
 ### Merge conflict you need to resolve deliberately
 
@@ -320,8 +359,6 @@ Take that branch's `OptOutAwareAnalytics` component and combine both hooks:
 
 and keep patch 0003's `send_page_view: false` plus the redacted `page_path`.
 Landing either branch alone leaves one of the two holes open.
-
----
 
 ## 4. Live infrastructure — what I could and could not check
 
@@ -352,70 +389,84 @@ rotation ownership for all ~18 vars. That needs the Vercel dashboard.
 
 ---
 
-## 5. Still open, ranked
+## 5. Still open
 
-**Blocking:**
+Everything in this section needs the live accounts, a real build, or your
+signature. There are no remaining code-side items.
 
-1. **Deploy `main`.** The security fixes have been undeployed for a week; the
-   live build is two months old.
-2. **Green CI run** on the fix branch — that is the B3 evidence.
-3. **One real `next build`** — nothing here has been compiled.
-4. **Rehearse `migrate deploy` against an empty database**, then confirm both
-   partial unique indexes exist in the resulting schema.
-5. **Verify the ~18 production env vars** in the dashboard.
-6. **Decide the registration consent gate** (disclosure currently lands after
-   account creation).
-7. **Rotate the GA property, or accept the exposure.** Any reset token clicked
-   before patch 0003 ships is in GA, Vercel Analytics and Sentry history.
-   Reset JWTs expire in an hour so the live risk window has passed, but the
-   retained data is a disclosure question, not a technical one.
+**Blocking, in order:**
 
-**Should fix before launch, not included in these patches:**
+1. **Deploy `main`.** The security fixes have been undeployed since 2026-09-18;
+   the live build is from 2026-07-25. This is the single largest gap.
+2. **Green CI run** on the fix branch. That is the B3 evidence, and it is also
+   the first real `next build` and the first execution of the 24 DB/Redis tests.
+3. **Rehearse `migrate deploy` against an empty database**, then confirm both
+   partial unique indexes exist in the resulting schema. Then re-read
+   `docs/migration-baseline-squash.md` and decide whether that squash is still
+   needed at all — the bug it was written for does not exist.
+4. **Verify the ~18 production env vars** in the Vercel dashboard. The connector
+   token here lacks `projectEnvVars` read permission (403), so presence, scope,
+   format and rotation ownership are all still unverified.
+5. **Confirm `NEXT_PUBLIC_APP_URL` is the canonical `www` host.** The apex
+   redirects to `www`, so if it is set to the apex, every verification and reset
+   link takes a 308 first.
+6. **Set `sslmode=verify-full` explicitly in `DATABASE_URL`.** `pg` currently
+   aliases `require` to `verify-full` and will adopt weaker libpq semantics in
+   v9 — 98 deprecation warnings in the last 7 days are telling you this now.
+7. **Configure `HEARTBEAT_URL_BASE`** with dead-man periods matching the real
+   schedules (all six crons are daily; the runbook's old "weekly" line for
+   `cleanup-swaps` is corrected).
+8. **Confirm the Vercel plan allows six crons** — Hobby caps at two.
+9. **Rotate the GA property, or accept the exposure.** Any reset token clicked
+   before patch 0003 ships is in GA, Vercel Analytics and Sentry history. Reset
+   JWTs expire in an hour so the live risk window has passed; the retained data
+   is a disclosure question, not a technical one.
+10. **Sign off on the accepted risks below.**
 
-8. Revocation enforced only in middleware — add a second layer in
-   `requireUser()` or a `tokenVersion` claim.
-9. Move `prisma` to `devDependencies` (closes B4 structurally).
-10. Login is an enumeration oracle by both message and timing: unknown email
-    returns 401 with **no bcrypt run**, wrong password returns 401 after a
-    ~100 ms compare. `forgot-password` is carefully padded to 400 ms; login is
-    not. Compare against a fixed dummy hash and return one 401 for all
-    credential failures.
-11. Indefinite lockout DoS: `loginAttempts` resets only on *successful* login,
-    so once it hits 10, one wrong password every 15 minutes — far under the
-    10/min IP limit — locks a known email out forever. Reset the counter when
-    `lockedUntil` has passed.
-12. `clientIp` trusts the **leftmost** `X-Forwarded-For` hop at the default
-    `TRUSTED_PROXY_HOPS=0`, and `isValidIp` accepts `"1:2"` or `"::::"` as
-    IPv6. If anything is ever put in front of Vercel without setting that var,
-    an attacker gets unlimited fresh rate-limit buckets. Vercel always sets
-    `x-vercel-forwarded-for` to the true client IP and this code ignores it.
-13. Email change keeps `verified: true` and never validates the address format —
-    a user can move their account to an address they don't control, or set it to
-    `x@deleted.invalid`, which `checkActive` reads as deleted: permanent
-    self-lockout with no admin-visible cause.
-14. `disputed` is a terminal state. The schema says "admin resolves"; no admin
-    route touches it. Disputes will accumulate with no resolution path.
-15. Depot is self-asserted — any user can set their own `depotId`, and the 7-day
-    cooldown is skipped when the current value is null, so `null` then `X`
-    defeats it entirely. The scoping fixes in patch 0002 are real, but the
-    boundary underneath them is soft until depot is tied to invite or
-    verification.
-16. Push notification bodies include 100 characters of message text plus the
-    sender's full name, readable on a locked shared phone.
-17. `lib/rateLimit.ts:60` — a missing Upstash config disables **all** rate
-    limiting, including in production. The file header and inline comments also
-    describe fail-*open* while the code fails *closed* (line 80); the next
-    maintainer will read the wrong behaviour.
-18. `expiring-soon` and `daily-digest` are not idempotent, and Vercel cron
-    delivery is at-least-once — a retry double-notifies everyone. A per-day
-    Redis run-marker fixes it.
-19. `npm run lint` fails (19 errors). Add lint to CI once clean.
-20. `public/sw.js` cache name is now bumped manually. Wire it to
-    `VERCEL_GIT_COMMIT_SHA` with a generated service worker.
+**Accepted, deliberately, and worth knowing:**
 
-**Still needs your hands, no code involved:** email deliverability (SPF/DKIM/
-DMARC, bounce handling) tested in staging; a real staging Neon branch isolated
-from production; backups and a rehearsed point-in-time restore; mobile PWA and
-iOS 16.4+ push from an installed app; keyboard-only and screen-reader passes;
-a monitored mailbox and named on-call owner for abuse reports; `HEARTBEAT_URL_BASE`
-configured with dead-man periods matching the real schedules.
+- `Sentry.captureEvent` on failed logins and rate-limit hits still tags the
+  client IP. That is an explicit choice for abuse investigation, and it sits
+  slightly against `sendDefaultPii: false` — which stops *automatic* collection,
+  not this deliberate tag. Say so in the Privacy Policy or drop the tag.
+- Depot membership is still self-asserted: any user can set their own `depotId`.
+  The round-trip-through-null loophole in the 7-day cooldown is closed, but the
+  scoping fixes in patch 0002 rest on a boundary that is soft until depot is tied
+  to the invite or to verification. Reasonable for launch; not indefinitely.
+- 10 eslint warnings remain (unused vars, two `<img>` elements, two
+  `window.location.href` navigations). Harmless, and the lint script caps at that
+  count so no new ones creep in.
+- `public/sw.js` cache name is bumped by hand. Wiring it to
+  `VERCEL_GIT_COMMIT_SHA` needs a generated service worker — a follow-up, not a
+  blocker.
+- Chunking for `agreement-followups` and `expire-swaps`. `maxDuration = 300` buys
+  headroom; at real volume they will want batching.
+
+**Still needs your hands, no code involved:** email deliverability
+(SPF/DKIM/DMARC, bounce handling) tested in staging; a real staging Neon branch
+isolated from production; backups and a rehearsed point-in-time restore; mobile
+PWA and iOS 16.4+ push from an installed app; keyboard-only and screen-reader
+passes; a monitored mailbox and named on-call owner for abuse reports.
+
+---
+
+## 6. Second-pass changes, in brief
+
+Everything below was open at the end of the first pass and is now closed. Details
+are in the commit messages.
+
+| Area | What changed |
+|---|---|
+| Revocation | Moved into `requireUser()`; 73 call sites; 401 vs 503 distinguished; `x-middleware-subrequest` refused |
+| Login | Dummy-hash compare kills the timing oracle; one 401 for every credential failure; expired locks reset the counter (the indefinite-lockout DoS) |
+| Register | Invite code validated before the email-exists 409, so a garbage code no longer enumerates addresses |
+| Rate limiter | Fails closed in production when Upstash is missing; `isValidIp` uses a real parser; `clientIp` prefers `x-vercel-forwarded-for`; comments now match the code |
+| Profile | Email format validated; changing it clears `verified` and re-sends verification; `@deleted.invalid` rejected; depot cooldown can't be reset via null |
+| Disputes | New `admin/disputes` queue — `disputed` was terminal with no admin route, making no-shows deniable |
+| Crons | `claimDailyRun()` makes the two notifying crons idempotent against at-least-once delivery |
+| Notifications | Message text removed from push bodies (lock-screen leak) |
+| URLs | Report email uses `getAppUrl()`; verify-email no longer falls back into production from a preview |
+| Dependencies | `prisma` → devDependencies, removing every high advisory from `--omit=dev` |
+| Lint | 19 errors → 0, and CI now runs it |
+| Registration | Non-affiliation acknowledgement gates account creation |
+| Tests | 43 → 55 passing, including the file that caught the `redactSensitiveText` bug |
