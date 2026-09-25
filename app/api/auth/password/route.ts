@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import * as Sentry from "@sentry/nextjs";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { rateLimit } from "@/lib/rateLimit";
@@ -10,7 +10,7 @@ import { blockUserAccessTokens } from "@/lib/tokenBlocklist";
 
 export async function PUT(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   if (!await rateLimit(`change-password:${user.userId}`, 5, 15 * 60 * 1000)) {
     Sentry.captureEvent({ message: "Change-password rate limit hit", level: "warning", extra: { userId: user.userId } });

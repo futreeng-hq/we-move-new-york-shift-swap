@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { rateLimit } from "@/lib/rateLimit";
@@ -7,7 +7,7 @@ import { checkSwapAccess } from "@/lib/accessScope";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   if (!await rateLimit(`save:${user.userId}`, 60, 60_000)) {
     return err("Slow down — max 60 saves per minute", 429);
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   if (!await rateLimit(`save:${user.userId}`, 60, 60_000)) {
     return err("Slow down — max 60 saves per minute", 429);

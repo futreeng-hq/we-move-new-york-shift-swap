@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, checkActive } from "@/lib/auth";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rateLimit";
 import { ok, err } from "@/lib/apiResponse";
@@ -10,7 +10,7 @@ import { escapeHtml } from "@/lib/escapeHtml";
 
 export async function GET(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const unreadCount = await prisma.message.count({
     where: { toUserId: user.userId, read: false },
@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   if (!await rateLimit(`msg:${user.userId}`, 5, 60_000)) {
     return err("Slow down! Max 5 messages per minute", 429);

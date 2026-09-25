@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { err } from "@/lib/apiResponse";
 import { getAppUrl } from "@/lib/appUrl";
@@ -12,7 +12,7 @@ import { buildCalendar, IcsEvent } from "@/lib/ics";
 // have nothing sane to export → 404 (the UI hides the button for them).
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const { id } = await params;
 

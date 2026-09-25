@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, checkActive } from "@/lib/auth";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { parseBody, BODY_4KB } from "@/lib/parseBody";
@@ -8,7 +8,7 @@ import { parseBody, BODY_4KB } from "@/lib/parseBody";
 // DELETE /api/depots/:code/announcements/:aid → delete
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ code: string; aid: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const { code, aid } = await params;
   const dbUser = await prisma.user.findUnique({ where: { id: user.userId } });
@@ -57,7 +57,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ co
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ code: string; aid: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const { code, aid } = await params;
   const dbUser = await prisma.user.findUnique({ where: { id: user.userId } });

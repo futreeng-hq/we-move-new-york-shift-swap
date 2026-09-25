@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { requireUser, checkActive } from "@/lib/auth";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, rateLimitByIp, clientIp } from "@/lib/rateLimit";
 import { ok, err } from "@/lib/apiResponse";
@@ -14,7 +14,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   // Rate limit reports — prevent flooding the admin queue with bogus reports.
   // Per-IP cap protects against many compromised accounts on the same network.

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rateLimit";
 import { ok, err } from "@/lib/apiResponse";
@@ -12,7 +12,7 @@ import bcrypt from "bcryptjs";
 // Requires password confirmation before deleting own account (GDPR right to erasure)
 export async function POST(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   // Rate limit: deletion is destructive and password-gated, so an attacker
   // with a stolen access token shouldn't be able to brute-force the password

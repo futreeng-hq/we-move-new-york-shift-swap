@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { parseBody, BODY_1KB } from "@/lib/parseBody";
@@ -20,7 +20,7 @@ import { parseBody, BODY_1KB } from "@/lib/parseBody";
 // passed, urlPrefix takes precedence (it's the more general match).
 export async function POST(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const body = await parseBody(req, BODY_1KB);
   if (body instanceof NextResponse) return body;

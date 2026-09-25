@@ -1,12 +1,12 @@
 import { NextRequest } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { calcScore } from "@/lib/reputation";
 
 export async function GET(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   // Hide swaps from operators the current user has blocked, or who blocked them.
   // Symmetric, same as the browse list filter.

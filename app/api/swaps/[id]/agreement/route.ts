@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, checkActive } from "@/lib/auth";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { rateLimit } from "@/lib/rateLimit";
@@ -27,7 +27,7 @@ function computeShiftDate(swap: { date: Date | null; fromDate: Date | null; toDa
 // POST /api/swaps/:id/agreement  → propose a swap (does NOT lock the swap)
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const { id } = await params;
 
@@ -100,7 +100,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 // GET /api/swaps/:id/agreement?list=1   → owner only: all agreements on the swap
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const { id } = await params;
   const { searchParams } = new URL(req.url);
@@ -153,7 +153,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 // confirm (legacy userA_confirmed compat only).
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const { id } = await params;
 

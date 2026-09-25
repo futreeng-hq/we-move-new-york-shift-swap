@@ -1,11 +1,11 @@
 import { NextRequest } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 
 export async function GET(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const { searchParams } = new URL(req.url);
   const cursor = searchParams.get("cursor") ?? undefined;
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
 // DELETE /api/notifications  → delete all notifications for the user
 export async function DELETE(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const result = await prisma.notification.deleteMany({ where: { userId: user.userId } });
 

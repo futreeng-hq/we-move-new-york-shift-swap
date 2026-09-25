@@ -1,5 +1,17 @@
 // Distributed rate limiter using Upstash Redis.
-// Falls back to allowing the request if Redis is unavailable (e.g. local dev without Redis configured).
+//
+// Behaviour when Redis is not usable — stated precisely, because the previous
+// version of this comment said "falls back to allowing the request" while the
+// code below fails CLOSED in production, and the next person to read it would
+// have got it exactly backwards:
+//
+//   - Not configured (no URL/token): allow outside production, DENY in
+//     production. A production deploy with no Redis has no rate limiting at
+//     all, which is worse than a hard failure — lib/env.ts requires both vars
+//     in production, so reaching this branch there means the env check was
+//     bypassed.
+//   - Configured but erroring: allow outside production, DENY in production,
+//     and report to Sentry.
 
 import { Redis } from "@upstash/redis";
 
@@ -57,14 +69,24 @@ export async function redisHealth(): Promise<RedisHealth> {
 export async function rateLimit(key: string, limit: number, windowMs: number): Promise<boolean> {
   try {
     const store = getRedis();
-    if (!store) return true;
+    if (!store) {
+      // Previously `return true` unconditionally, so a production deploy that
+      // lost its Upstash env vars silently disabled every rate limit in the
+      // app — login, register, forgot-password, reports, the lot — with nothing
+      // anywhere saying so.
+      if (process.env.NODE_ENV === "production") {
+        console.error("[rateLimit] Upstash is not configured in production — failing closed for key", key);
+        return false;
+      }
+      return true;
+    }
     const windowSec = Math.ceil(windowMs / 1000);
     const count = await store.incr(key);
     if (count === 1) await store.expire(key, windowSec);
     return count <= limit;
   } catch (e) {
-    // Allow on any Redis error rather than block legitimate users, but surface it
-    console.error("[rateLimit] Redis error — failing open for key", key, e);
+    // Fails CLOSED in production (see the header comment) and open elsewhere.
+    console.error("[rateLimit] Redis error — failing closed in production for key", key, e);
     if (process.env.NODE_ENV === "production") {
       try {
         const Sentry = await import("@sentry/nextjs");
@@ -92,11 +114,27 @@ const TRUSTED_PROXY_HOPS = Number(process.env.TRUSTED_PROXY_HOPS ?? "0");
 
 const IPV4 = /^(\d{1,3}\.){3}\d{1,3}$/;
 
-/** Syntactic IP validation — rejects header junk before it becomes a bucket key. */
+/**
+ * Syntactic IP validation — rejects header junk before it becomes a bucket key.
+ *
+ * The old IPv6 branch was `v.includes(":") && /^[0-9a-fA-F:.]+$/.test(v)`, which
+ * accepted ":", "1:2", "a:b" and "::::". That is not pedantry: every distinct
+ * string is a distinct Redis bucket, so an attacker who can influence the
+ * chosen header walks "1:1", "1:2", "1:3"… and gets unlimited fresh
+ * login/register/forgot-password counters. Now uses the platform parser.
+ */
 function isValidIp(v: string): boolean {
   if (!v || v.length > 45) return false;
   if (IPV4.test(v)) return v.split(".").every((o) => Number(o) <= 255);
-  return v.includes(":") && /^[0-9a-fA-F:.]+$/.test(v); // IPv6, incl. v4-mapped
+  if (!v.includes(":")) return false;
+  // URL is the only structural IPv6 parser available in both the node and edge
+  // runtimes. It normalizes and rejects malformed literals.
+  try {
+    const u = new URL(`http://[${v}]`);
+    return u.hostname.startsWith("[") && u.hostname.endsWith("]");
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -128,6 +166,15 @@ export async function rateLimitByIp(
  * counter and gave an attacker a way to exhaust it for everyone.
  */
 export function clientIp(req: Request): string | null {
+  // Vercel sets this to the true client IP on every request and does not let a
+  // client forge it — unlike X-Forwarded-For, whose leftmost entry is only
+  // trustworthy while nothing else sits in front of this app. Preferring it
+  // means the limiter stays correct even if Cloudflare or an ALB is added later
+  // without anyone remembering to set TRUSTED_PROXY_HOPS. Absent off Vercel,
+  // where the X-Forwarded-For logic below still applies.
+  const vercelIp = req.headers.get("x-vercel-forwarded-for")?.split(",")[0].trim();
+  if (vercelIp && isValidIp(vercelIp)) return vercelIp;
+
   const xff = req.headers.get("x-forwarded-for");
   if (xff) {
     const hops = xff.split(",").map((h) => h.trim()).filter(Boolean);

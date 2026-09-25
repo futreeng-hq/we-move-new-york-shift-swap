@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, checkActive } from "@/lib/auth";
+import crypto from "crypto";
+import * as Sentry from "@sentry/nextjs";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { calcScore } from "@/lib/reputation";
 import { ok, err } from "@/lib/apiResponse";
 import { parseBody, BODY_200KB } from "@/lib/parseBody";
+import { sendEmail } from "@/lib/email";
+import { escapeHtml } from "@/lib/escapeHtml";
+import { getAppUrl } from "@/lib/appUrl";
 
 export async function GET(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const dbUser = await prisma.user.findUnique({
     where: { id: user.userId },
@@ -60,7 +65,7 @@ export async function GET(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const body = await parseBody(req, BODY_200KB);
   if (body instanceof NextResponse) return body;
@@ -121,6 +126,19 @@ export async function PUT(req: NextRequest) {
       where: { email: email.toLowerCase(), NOT: { id: user.userId } },
     });
     if (existing) return err("Email already in use", 409);
+
+    // Format was never validated — only length. A user could set their address
+    // to anything, including a domain they do not control, and stay `verified`.
+    const normalized = email.toLowerCase().trim();
+    if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(normalized)) {
+      return err("Enter a valid email address", 400);
+    }
+    // @deleted.invalid is the sentinel checkActive() reads as a deleted
+    // account, so accepting it here let a user permanently lock themselves out
+    // with no admin-visible cause.
+    if (normalized.endsWith("@deleted.invalid")) {
+      return err("Enter a valid email address", 400);
+    }
   }
 
   // Depot change enforcement
@@ -130,31 +148,79 @@ export async function PUT(req: NextRequest) {
       select: { depotId: true, depotSetAt: true, role: true },
     });
     const isAdmin = dbUser?.role === "admin" || dbUser?.role === "subAdmin";
-    if (!isAdmin && dbUser?.depotId && dbUser.depotId !== depotId && depotId !== null) {
+    // The cooldown used to be skipped whenever the CURRENT depotId was null or
+    // the NEW value was null, so setting depotId to null and then to the target
+    // defeated it entirely in two requests. Clearing the depot now counts as a
+    // change and starts the clock like any other.
+    if (!isAdmin && dbUser?.depotId !== depotId) {
       const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-      if (dbUser.depotSetAt && (Date.now() - dbUser.depotSetAt.getTime()) < sevenDaysMs) {
+      if (dbUser?.depotSetAt && (Date.now() - dbUser.depotSetAt.getTime()) < sevenDaysMs) {
         const unlocksAt = new Date(dbUser.depotSetAt.getTime() + sevenDaysMs);
         return err(`Home depot can only be changed once every 7 days. Unlocks ${unlocksAt.toLocaleDateString("en-US", { month: "long", day: "numeric" })}.`, 403);
       }
     }
   }
 
+  // Changing the address must re-open verification. Previously `verified` was
+  // left at true, so a user could move their account to an address they do not
+  // control and keep full access to it — and `verified` is only ever enforced
+  // at login and refresh, never on a write path, so the existing session
+  // carried on regardless.
+  const normalizedEmail = email ? email.toLowerCase().trim() : undefined;
+  const emailIsChanging = Boolean(normalizedEmail && normalizedEmail !== callerUser.email);
+  const verifyToken = emailIsChanging ? crypto.randomBytes(32).toString("hex") : null;
+
   const updated = await prisma.user.update({
     where: { id: user.userId },
     data: {
       ...(firstName && { firstName: firstName.trim() }),
       ...(lastName && { lastName: lastName.trim() }),
-      ...(email && { email: email.toLowerCase().trim() }),
+      ...(normalizedEmail && { email: normalizedEmail }),
+      ...(emailIsChanging && {
+        verified: false,
+        emailVerifyToken: verifyToken,
+        emailVerifyExpires: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      }),
       ...(language && { language }),
       ...(jobTitle !== undefined && { jobTitle }),
       ...(avatarUrl !== undefined && { avatarUrl }),
-      ...(depotId !== undefined && {
-        depotId,
-        ...(depotId ? { depotSetAt: new Date() } : {}),
-      }),
+      // depotSetAt is stamped on every depot change, including clearing it, so
+      // the 7-day cooldown cannot be reset by round-tripping through null.
+      ...(depotId !== undefined && { depotId, depotSetAt: new Date() }),
     },
     include: { depot: true },
   });
+
+  if (emailIsChanging && verifyToken) {
+    const appUrl = getAppUrl();
+    if (appUrl) {
+      const verifyLink = `${appUrl}/verify-email/${verifyToken}`;
+      const safeFirstName = escapeHtml(updated.firstName);
+      try {
+        await sendEmail(
+          updated.email,
+          "Verify your new WMNY Shift Swap email",
+          `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;background:#010028;color:#fff;border-radius:16px">
+            <h1 style="font-size:22px;font-weight:800;margin-bottom:8px">Verify your new email</h1>
+            <p style="color:rgba(255,255,255,.6);font-size:14px;line-height:1.6;margin-bottom:24px">
+              Hi ${safeFirstName}, you changed the email on your WMNY Shift Swap account.
+              Confirm this address to finish. This link expires in 24 hours.
+            </p>
+            <a href="${verifyLink}" style="display:inline-block;padding:14px 28px;border-radius:12px;background:#D1AD38;color:#010028;font-weight:700;font-size:15px;text-decoration:none">
+              Verify Email
+            </a>
+            <p style="color:rgba(255,255,255,.4);font-size:12px;margin-top:24px">
+              If you didn't change your email, contact support right away.
+            </p>
+          </div>`,
+        );
+      } catch (e) {
+        // Non-fatal: the change is already saved and resend-verification can
+        // re-issue. Surfaced so a silent delivery failure is not invisible.
+        Sentry.captureException(e, { tags: { route: "users/me PUT email-change" } });
+      }
+    }
+  }
 
   return ok({
     id: updated.id,

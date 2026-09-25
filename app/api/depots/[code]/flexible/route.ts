@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { calcScore } from "@/lib/reputation";
 import { ok, err } from "@/lib/apiResponse";
@@ -7,7 +7,7 @@ import { ok, err } from "@/lib/apiResponse";
 // GET /api/depots/:code/flexible → list operators in this depot with flexibleMode on
 export async function GET(req: NextRequest, { params }: { params: Promise<{ code: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const { code } = await params;
   const depot = await prisma.depot.findUnique({ where: { code } });

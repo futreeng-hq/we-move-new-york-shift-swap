@@ -1,5 +1,7 @@
 import jwt from "jsonwebtoken";
 import { NextRequest } from "next/server";
+import { isUserForcedLogout } from "@/lib/tokenBlocklist";
+import { err } from "@/lib/apiResponse";
 
 function requireEnv(name: string): string {
   const val = process.env[name];
@@ -44,6 +46,7 @@ export function getTokenFromRequest(req: NextRequest): string | null {
   return null;
 }
 
+/** Signature verification only — says nothing about revocation. */
 export function getUserFromRequest(req: NextRequest): TokenPayload | null {
   const token = getTokenFromRequest(req);
   if (!token) return null;
@@ -54,10 +57,69 @@ export function getUserFromRequest(req: NextRequest): TokenPayload | null {
   }
 }
 
-export function requireUser(req: NextRequest): TokenPayload {
+/**
+ * Thrown by requireUser. `kind` lets a route answer 401 vs 503 without every
+ * call site re-deriving it — pass the caught value to authError().
+ */
+export class AuthFailure extends Error {
+  constructor(readonly kind: "unauthorized" | "revoked" | "unavailable") {
+    super(kind);
+    this.name = "AuthFailure";
+  }
+}
+
+/**
+ * Authenticate a request: verify the signature AND confirm the token has not
+ * been revoked.
+ *
+ * The revocation check lives here, not only in middleware, because middleware
+ * is one layer and the wrong one to depend on alone: it had a token-extraction
+ * bug that silently skipped the check (see git history), it does not run for
+ * authenticated work outside the matcher, and a Next.js middleware-bypass CVE
+ * would hand an attacker every route at once. This is the layer that sits
+ * against the data.
+ *
+ * Middleware still performs the check for page routes, which have no
+ * requireUser, so a request pays exactly one Redis round-trip either way.
+ *
+ * Async as a consequence. Every call site must await it.
+ */
+export async function requireUser(req: NextRequest): Promise<TokenPayload> {
   const user = getUserFromRequest(req);
-  if (!user) throw new Error("UNAUTHORIZED");
+  if (!user) throw new AuthFailure("unauthorized");
+
+  // A token with no iat cannot be compared against the force-logout marker, so
+  // it cannot be proven un-revoked. All tokens this app signs carry one.
+  if (typeof user.iat !== "number") throw new AuthFailure("unauthorized");
+
+  let revoked: boolean;
+  try {
+    revoked = await isUserForcedLogout(user.userId, user.iat * 1000);
+  } catch {
+    // isUserForcedLogout already fails closed internally; this is belt-and-braces.
+    throw new AuthFailure("unavailable");
+  }
+
+  if (revoked) {
+    // isUserForcedLogout returns true both for a genuinely revoked token and,
+    // in production, when Redis is absent or unreachable — it cannot prove the
+    // token is still good. Distinguish them so an Upstash outage reads as
+    // "try again" rather than telling every operator they were signed out.
+    const redisConfigured =
+      Boolean(process.env.UPSTASH_REDIS_REST_URL) && Boolean(process.env.UPSTASH_REDIS_REST_TOKEN);
+    throw new AuthFailure(redisConfigured ? "revoked" : "unavailable");
+  }
+
   return user;
+}
+
+/** Maps a caught requireUser failure to the right response. */
+export function authError(e: unknown): Response {
+  if (e instanceof AuthFailure) {
+    if (e.kind === "revoked") return err("Session invalidated. Please sign in again.", 401);
+    if (e.kind === "unavailable") return err("Session validation temporarily unavailable", 503);
+  }
+  return err("Unauthorized", 401);
 }
 
 /**

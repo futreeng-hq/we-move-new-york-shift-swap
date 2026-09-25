@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { calcScore } from "@/lib/reputation";
 import { ok, err } from "@/lib/apiResponse";
@@ -9,7 +9,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   let token;
-  try { token = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { token = await requireUser(req); } catch (e) { return authError(e); }
 
   const admin = await prisma.user.findUnique({ where: { id: token.userId } });
   if (!admin || !["admin", "subAdmin"].includes(admin.role)) return err("Forbidden", 403);

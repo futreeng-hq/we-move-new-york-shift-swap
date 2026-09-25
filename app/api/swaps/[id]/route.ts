@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, checkActive } from "@/lib/auth";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rateLimit";
 import { calcScore } from "@/lib/reputation";
@@ -35,7 +35,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
   const { id } = await params;
 
   const swap = await getSwapWithRep(id);
@@ -86,7 +86,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
   const { id } = await params;
 
   // Rate limit edits same as posts (per-user) to prevent spam-edit churn
@@ -197,7 +197,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
   const { id } = await params;
 
   // Deleting a swap with a live agreement dings reputation and notifies the

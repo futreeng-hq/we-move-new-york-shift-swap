@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { writeAuditLog } from "@/lib/audit";
@@ -9,7 +9,7 @@ import { blockUserAccessTokens } from "@/lib/tokenBlocklist";
 
 export async function GET(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.userId } });
   if (!dbUser || !["admin", "subAdmin"].includes(dbUser.role)) return err("Forbidden", 403);
@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.userId } });
   if (!dbUser || dbUser.role !== "admin") return err("Forbidden", 403);
@@ -131,7 +131,7 @@ export async function PATCH(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.userId } });
   if (!dbUser || dbUser.role !== "admin") return err("Forbidden", 403);
