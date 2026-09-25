@@ -75,15 +75,24 @@ jobs:
       - run: npx prisma generate
       # db push + partial-indexes.sql, NOT migrate deploy.
       #
-      # migrate deploy cannot build this database from scratch: Prisma orders
-      # migrations by numeric prefix, so the hand-named 8-digit dirs sort ahead
-      # of the 14-digit baseline (20260401214939_init) and the first one applied
-      # ALTERs a users table that does not exist yet. Production and preview are
-      # unaffected — they were built incrementally — but a bare DB fails.
+      # NOTE: the ordering explanation that used to be here was wrong, and so is
+      # the matching passage in docs/migration-baseline-squash.md. Prisma sorts
+      # migration directories lexicographically, and '2' (0x32) sorts before
+      # '_' (0x5F), so 20260401214939_init sorts FIRST — the 8-digit dirs do not
+      # jump ahead of the baseline, and applying all 16 in order against an
+      # empty database succeeds through the first 15.
+      #
+      # The actual blocker was 20260704_drop_unused_audit_action, which dropped
+      # a type no migration ever creates (it exists in production only as
+      # pre-migration drift). Fixed with DROP TYPE IF EXISTS. Once that fix has
+      # been rehearsed against an empty database, this job should move to
+      # `migrate deploy` so CI exercises production's real path.
       #
       # db push builds the full schema, then partial-indexes.sql adds the two
       # partial unique indexes db push cannot express. Without them the conflict
-      # tests return 201 instead of 409. See prisma/partial-indexes.sql.
+      # tests return 201 instead of 409. See prisma/partial-indexes.sql. Note
+      # this also means CI's constraints are not identical to production's, so
+      # the indexes must be verified in the deployed database separately.
       - run: npx prisma db push --accept-data-loss
       - run: npx prisma db execute --file prisma/partial-indexes.sql
 

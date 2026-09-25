@@ -74,7 +74,16 @@ export interface ValidationResult {
 /** Pure: check a given environment. Exported for tests. */
 export function validateEnv(
   env: EnvLike = process.env,
-  isProduction = env.NODE_ENV === "production",
+  // VERCEL_ENV, not NODE_ENV, is the discriminator on Vercel: NODE_ENV is
+  // "production" on preview deployments too. Gating on NODE_ENV made
+  // assertEnv() throw at boot on every preview, because lib/appUrl.ts
+  // deliberately omits NEXT_PUBLIC_APP_URL there and falls back to VERCEL_URL —
+  // a fallback that was unreachable as long as the boot check rejected it
+  // first. Off Vercel (local, CI, Docker) VERCEL_ENV is unset, so this keeps
+  // the old NODE_ENV behavior.
+  isProduction = env.VERCEL_ENV
+    ? env.VERCEL_ENV === "production"
+    : env.NODE_ENV === "production",
 ): ValidationResult {
   const problems: string[] = [];
 
