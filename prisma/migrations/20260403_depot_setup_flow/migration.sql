@@ -1,3 +1,0 @@
-ALTER TABLE "users"
-  ADD COLUMN IF NOT EXISTS "job_title"    TEXT,
-  ADD COLUMN IF NOT EXISTS "depot_set_at" TIMESTAMP(3);
