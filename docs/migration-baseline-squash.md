@@ -28,13 +28,34 @@ P3018 records the migration as **failed** in `_prisma_migrations`, which then bl
 
 ## Why this is needed
 
-> **Correction (2026-09-25).** The diagnosis below this line was wrong, and the
-> same wrong explanation was copied into `.github/workflows/ci.yml`. Prisma sorts
-> migration directories **lexicographically**, not by parsed numeric prefix, and
-> `'2'` (0x32) sorts before `'_'` (0x5F) — so `20260401214939_init` sorts
-> **first**, and the 8-digit directories do not jump ahead of it. Applying all 16
-> `migration.sql` files in order against an empty Postgres 16 succeeds through
-> the first 15.
+> **The "Correction (2026-09-25)" that stood here was itself wrong, and is
+> retracted (2026-09-26). The original diagnosis below this line is correct and
+> this runbook should be executed.**
+>
+> That correction claimed Prisma sorts migration directories lexicographically,
+> where `'2'` (0x32) precedes `'_'` (0x5F), so `20260401214939_init` sorts first
+> and the 8-digit directories do not jump ahead of it. It asserted this as
+> "rehearsed" without ever running `migrate deploy` against an empty database —
+> the check it claimed to have done was a shell `sort`, which is not Prisma's
+> ordering.
+>
+> Prisma orders by the numeric timestamp prefix, exactly as originally
+> documented. CI proved it on the first `pull_request` run of PR #46:
+> `20260401_add_agreements_push_roles` failed with
+> `42P01 relation "users" does not exist`. Reproduced directly against an empty
+> Postgres 16 on 2026-09-26 — numeric-prefix order fails on that migration;
+> `init`-first order applies all 16 cleanly.
+>
+> The `DROP TYPE IF EXISTS` fix from that pass is still correct and still
+> needed. It was a second, real bug sitting behind this one — not a replacement
+> for it.
+>
+> Everything below is the original, rehearsed guidance. Follow it.
+>
+> ~~Prisma sorts migration directories **lexicographically**, not by parsed
+> numeric prefix, and `'2'` (0x32) sorts before `'_'` (0x5F) — so
+> `20260401214939_init` sorts **first**, and the 8-digit directories do not jump
+> ahead of it.~~
 >
 > The actual from-scratch failure was
 > `20260704_drop_unused_audit_action/migration.sql`, which ran a bare
@@ -49,18 +70,17 @@ P3018 records the migration as **failed** in `_prisma_migrations`, which then bl
 >
 > Fixed by changing that one statement to `DROP TYPE IF EXISTS`.
 >
-> **Rehearsed 2026-09-25: this squash is no longer needed.** All 16 migrations
-> apply cleanly, in order, to an empty Postgres 16, and both partial unique
-> indexes are present afterwards (they come from `20260704_trust_v2`, which the
-> P3009 block had been preventing from ever running). CI has been switched from
-> `db push` to `migrate deploy` accordingly, so it now builds the database
-> exactly as production does — under `db push` its constraints were not the same
-> as production's, because `db push` cannot express a partial unique index.
+> ~~**Rehearsed 2026-09-25: this squash is no longer needed.**~~ **Retracted
+> 2026-09-26. The squash IS still needed and this runbook is live.** The claim
+> that all 16 migrations apply cleanly in order was produced by a shell `sort`,
+> not by `migrate deploy`, and is false under Prisma's ordering. CI has been
+> reverted to `db push` + `partial-indexes.sql` until this runbook is executed.
 >
-> The rest of this document is kept for history. Do not run the 6-step runbook
-> below; it resolves a problem that does not exist, and `migrate resolve
-> --applied` against production's `_prisma_migrations` on a misdiagnosis is not
-> a harmless no-op.
+> Note for step 6: `db push` cannot express a partial unique index, so while CI
+> is on `db push` its constraints are not identical to production's. That is a
+> real cost and it is why finishing this runbook matters — but it is a weaker
+> guarantee, not a broken one, because `partial-indexes.sql` adds the two
+> indexes explicitly and CI asserts both exist.
 
 ~~Prisma orders migrations by the numeric prefix of the directory name. Actual apply order today:~~
 
