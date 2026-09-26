@@ -77,25 +77,37 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - run: npx prisma generate
-      # migrate deploy — production's actual path.
+      # db push + partial-indexes.sql, NOT migrate deploy.
       #
-      # This job used `db push` + partial-indexes.sql for a long time, on the
-      # belief that the history could not replay from scratch because the
-      # hand-named 8-digit dirs sorted ahead of the 14-digit baseline. That was
-      # wrong twice over. Prisma sorts lexicographically and '2' (0x32) precedes
-      # '_' (0x5F), so 20260401214939_init sorts FIRST. The real blocker was
-      # 20260704_drop_unused_audit_action running a bare DROP TYPE on a type no
-      # migration creates; it is now DROP TYPE IF EXISTS.
+      # This step was briefly switched to `migrate deploy` on the theory that
+      # Prisma sorts migrations lexicographically, where '2' (0x32) precedes
+      # '_' (0x5F) and 20260401214939_init would sort first. That theory was
+      # wrong and CI caught it on the first pull_request run: Prisma orders by
+      # the numeric timestamp prefix, so the fifteen hand-named 8-digit dirs
+      # (20260401, 20260402, ...) all sort AHEAD of the 14-digit baseline
+      # 20260401214939_init. init therefore runs last, and the first migration
+      # applied dies with 42P01 relation "users" does not exist.
       #
-      # Verified 2026-09-25: all 16 migrations apply cleanly to an empty
-      # Postgres 16 in this order, and both partial unique indexes are present
-      # afterwards (they come from 20260704_trust_v2).
+      # Reproduced 2026-09-26 against an empty Postgres 16: replaying in
+      # numeric-prefix order fails on 20260401_add_agreements_push_roles with
+      # exactly that error; replaying with init first, all 16 apply cleanly.
+      # So the SQL is fine and the directory NAMES are the defect.
       #
-      # This matters beyond tidiness. Under db push, CI's constraints were not
-      # the same as production's — db push cannot express a partial unique
-      # index, so the conflict tests were passing against a schema that differed
-      # from the real one. Now CI builds the database exactly as production does.
-      - run: npx prisma migrate deploy
+      # Fixing it means renaming those fifteen dirs to real 14-digit
+      # timestamps, which changes the names recorded in _prisma_migrations.
+      # Production would then see fifteen unknown migrations and try to apply
+      # them over an existing schema — verified to fail immediately with
+      # 'type "UserRole" already exists'. Since vercel-build runs
+      # `prisma migrate deploy && next build`, that would break production
+      # deploys. The rename needs a deliberate `migrate resolve --applied`
+      # reconciliation against production first. Tracked separately; do not
+      # switch this step back until that is done.
+      #
+      # db push builds the full schema, then partial-indexes.sql adds the two
+      # partial unique indexes db push cannot express. Without them the conflict
+      # tests return 201 instead of 409. See prisma/partial-indexes.sql.
+      - run: npx prisma db push --accept-data-loss
+      - run: npx prisma db execute --file prisma/partial-indexes.sql
 
       # The 409 duplicate-proposal path depends entirely on these two indexes,
       # and their absence is silent — the tests return 201 instead of 409, which

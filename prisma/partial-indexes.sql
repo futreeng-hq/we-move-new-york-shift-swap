@@ -13,14 +13,24 @@
 --      inserts cleanly instead of tripping P2002.
 --   2. Repairing a database where one was dropped.
 --
--- CORRECTION (2026-09-25): this header used to claim CI could not use
--- `migrate deploy` because the hand-named 8-digit dirs sorted ahead of the
--- 14-digit baseline. That was wrong — Prisma sorts lexicographically and '2'
--- (0x32) precedes '_' (0x5F), so 20260401214939_init sorts first. The real
--- blocker was a bare DROP TYPE in 20260704_drop_unused_audit_action on a type
--- no migration creates; it is now DROP TYPE IF EXISTS. All 16 migrations have
--- since been verified to apply cleanly to an empty Postgres 16, with both
--- indexes present afterwards, and CI now uses `migrate deploy`.
+-- RETRACTION (2026-09-26): a "CORRECTION" added here on 2026-09-25 claimed CI
+-- could use `migrate deploy` because Prisma sorts lexicographically, where '2'
+-- (0x32) precedes '_' (0x5F) and 20260401214939_init would sort first. That
+-- claim was false and was never actually tested against an empty database.
+--
+-- Prisma orders migrations by the numeric timestamp prefix. The fifteen
+-- hand-named 8-digit dirs (20260401, 20260402, ...) therefore sort AHEAD of
+-- the 14-digit baseline 20260401214939_init, so init runs last and the first
+-- migration applied fails with 42P01 relation "users" does not exist. CI
+-- reproduced this on the first pull_request run of PR #46, and it was then
+-- reproduced directly against an empty Postgres 16.
+--
+-- The SQL is correct; the directory names are the defect. Renaming them is
+-- the real fix, but it changes the names in _prisma_migrations and would make
+-- production re-apply fifteen migrations over an existing schema (verified to
+-- fail with 'type "UserRole" already exists'). That needs a deliberate
+-- `migrate resolve --applied` reconciliation first. Until then CI stays on
+-- db push and this file remains load-bearing.
 --
 -- Keep this file in sync when a migration adds or changes a partial index.
 

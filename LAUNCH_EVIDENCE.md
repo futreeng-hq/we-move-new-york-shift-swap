@@ -127,8 +127,8 @@ with that user existed. Fixed in patch 0002.
 | `npm run build` | **succeeded** — every route compiled |
 | `tsc --noEmit` | **0 errors** |
 | `npm run lint` | **0 errors**, 10 warnings |
-| All 16 migrations against an **empty** database | **applied cleanly** |
-| Both partial unique indexes after that migrate | **present** |
+| All 16 migrations against an **empty** database | **RETRACTED — see below** |
+| Both partial unique indexes after that migrate | **present** (via `db push` + `partial-indexes.sql`) |
 | CI's three canary assertions | **all fire** |
 
 The single remaining skip is `A12 (Redis-less fallback)`, which is gated to run
@@ -202,15 +202,36 @@ working path either.
 
 One-word fix (`DROP TYPE IF EXISTS`) in patch 0001.
 
-**And the documented cause was wrong.** `docs/migration-baseline-squash.md` and
-the CI comment both say `migrate deploy` fails because the hand-named 8-digit
-directories sort ahead of the 14-digit baseline. Prisma sorts
-lexicographically, and `'2'` (0x32) precedes `'_'` (0x5F), so
-`20260401214939_init` sorts **first** — the first 15 migrations apply cleanly.
-The 6-step squash runbook was chasing a bug that isn't there, and its acceptance
-checklist would have passed while the real one went unexamined. Corrected in
-patch 0004; **re-rehearse `migrate deploy` against an empty database before
-deciding whether that squash is still needed at all.**
+**RETRACTED (2026-09-26).** This section previously claimed the documented cause
+was wrong — that Prisma sorts lexicographically, `'2'` (0x32) precedes `'_'`
+(0x5F), so `20260401214939_init` sorts first and the squash runbook was chasing
+a bug that isn't there. That claim was false and had not been tested against an
+empty database. The original documentation in `docs/migration-baseline-squash.md`
+and the CI comment was **correct**.
+
+Prisma orders migrations by the numeric timestamp prefix. The fifteen hand-named
+8-digit directories sort ahead of the 14-digit baseline, so `init` runs last and
+the first migration applied fails with `42P01 relation "users" does not exist`.
+
+Evidence: CI failed on exactly this in the first `pull_request` run of PR #46
+(`20260401_add_agreements_push_roles`, `42P01`). Reproduced directly against an
+empty Postgres 16 on 2026-09-26 — replaying in numeric-prefix order fails on
+that migration; replaying with `init` first, all 16 apply cleanly. So the SQL is
+sound and the directory **names** are the defect.
+
+The `DROP TYPE IF EXISTS` fix in patch 0001 is still correct and still needed,
+but it was not the blocker; it was one bug behind the ordering one.
+
+**Standing consequence:** this schema was built by `db push`, and the migration
+history has never been the thing that built it. The database cannot currently be
+rebuilt from source — no fresh environment, staging copy or restore path. The
+fix is renaming those fifteen directories to real 14-digit timestamps, which
+changes the names in `_prisma_migrations` and would make production re-apply
+them over an existing schema (verified to fail with `type "UserRole" already
+exists`). Because `vercel-build` runs `prisma migrate deploy && next build`,
+that would break production deploys. The rename requires a deliberate
+`migrate resolve --applied` reconciliation against production first. **Tracked
+as its own task. CI stays on `db push` until it is done.**
 
 ### Critical privacy: reset and verification tokens were going to Google
 
@@ -323,7 +344,7 @@ Ten commits on branch `fix/launch-blockers-session-revocation`, one per phase.
 | 0006 | Revocation moved into `requireUser()`; login/register/rate-limit/profile hardening |
 | 0007 | Disputes queue, cron idempotency, dependency + lint hygiene, registration gate |
 | 0008 | Tests for the redaction, scrubbing and IP-validation fixes |
-| 0010 | CI on `migrate deploy`, partial-index assertion, test isolation |
+| 0010 | CI partial-index assertion, test isolation (the `migrate deploy` switch in this patch was reverted — see the retraction above) |
 
 ### What has actually been verified here
 
@@ -333,7 +354,8 @@ Ten commits on branch `fix/launch-blockers-session-revocation`, one per phase.
 | `npm run build` | **succeeded**, all routes compiled |
 | `tsc --noEmit` | **0 errors** |
 | `npm run lint` | **0 errors**, 10 warnings, now gating CI |
-| 16 migrations from empty + both partial indexes | **verified** |
+| 16 migrations from empty | **FAILS** — ordering defect, retracted above; not a launch blocker, production is unaffected |
+| Both partial indexes present in CI | **verified** (via `db push` + `partial-indexes.sql`) |
 
 Two things were caught by actually running the code rather than reading it, which
 is the argument for not trusting a static pass:
