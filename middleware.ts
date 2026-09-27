@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
+import { isPublicAsset } from "@/lib/publicAssets";
 
 let redis: Redis | null = null;
 function getRedis(): Redis | null {
@@ -31,15 +32,22 @@ export async function middleware(req: NextRequest) {
     return NextResponse.json({ error: "Bad request" }, { status: 400 });
   }
 
+  // The PWA shell short-circuits everything below. The matcher already keeps
+  // these paths out of middleware entirely; this is the second lock, so a
+  // future matcher edit cannot quietly put the service worker, the manifest or
+  // the icons back behind a Redis call. See lib/publicAssets.ts for why that
+  // mattered: it is what turned a hibernating Upstash instance into JSON 503s
+  // for /sw.js and /manifest.json.
+  //
+  // It sits above MAINTENANCE_MODE deliberately. The old maintenance allowlist
+  // covered /icons/ and /manifest.json but not /sw.js, so a maintenance window
+  // redirected the service worker request to /maintenance and the worker cached
+  // that redirect.
+  if (isPublicAsset(req.nextUrl.pathname)) return NextResponse.next();
+
   if (process.env.MAINTENANCE_MODE === "true") {
     const { pathname } = req.nextUrl;
-    if (
-      pathname === "/maintenance" ||
-      pathname.startsWith("/_next/") ||
-      pathname.startsWith("/icons/") ||
-      pathname === "/manifest.json" ||
-      pathname === "/api/health"
-    ) {
+    if (pathname === "/maintenance" || pathname.startsWith("/_next/") || pathname === "/api/health") {
       return NextResponse.next();
     }
     return NextResponse.redirect(new URL("/maintenance", req.url));
@@ -97,6 +105,11 @@ export async function middleware(req: NextRequest) {
   return NextResponse.next();
 }
 
+// Keep in sync with isPublicAsset() in lib/publicAssets.ts — Next requires this
+// to be a static literal, so it cannot be generated from that list.
+// test/publicAssets.test.ts asserts the two agree.
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|sw\\.js|manifest\\.json|icons/|logos/|.*\\.(?:png|jpg|jpeg|webp|avif|gif|svg|ico|txt|woff|woff2)$).*)",
+  ],
 };

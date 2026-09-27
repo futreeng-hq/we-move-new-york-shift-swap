@@ -69,6 +69,90 @@ const SPECS: Spec[] = [
 export interface ValidationResult {
   ok: boolean;
   problems: string[];
+  /**
+   * Misconfigurations that are real but must NOT stop the process.
+   *
+   * The distinction matters. A missing JWT_SECRET means nothing can work, so
+   * failing to boot is the kindest outcome. But `sslmode` absent from an
+   * otherwise working DATABASE_URL, or NEXT_PUBLIC_APP_URL pointing at the apex
+   * instead of www, are both live in production right now — promoting either to
+   * a `problem` would turn the next deploy into an outage over a config nit.
+   * These are surfaced loudly at boot and left for someone to fix deliberately.
+   */
+  warnings: string[];
+}
+
+/**
+ * Checks that produce warnings rather than boot failures. Split out from SPECS
+ * because the consequence is different, not because the findings are minor.
+ */
+function collectWarnings(env: EnvLike, isProduction: boolean): string[] {
+  const warnings: string[] = [];
+  if (!isProduction) return warnings;
+
+  // `pg` currently treats sslmode=require as verify-full, but v9 adopts libpq
+  // semantics where `require` encrypts WITHOUT verifying the server
+  // certificate — i.e. no protection against an active MITM. Spelling
+  // verify-full out now means the upgrade is a non-event instead of a silent
+  // downgrade. Neon emits a deprecation warning for exactly this.
+  const db = env.DATABASE_URL?.trim();
+  if (db && !/[?&]sslmode=verify-full(&|$)/.test(db)) {
+    const mode = db.match(/[?&]sslmode=([^&]+)/)?.[1];
+    warnings.push(
+      mode
+        ? `DATABASE_URL has sslmode=${mode} — set sslmode=verify-full explicitly before pg v9, where "require" stops verifying the server certificate`
+        : "DATABASE_URL has no sslmode — set sslmode=verify-full explicitly (pg currently defaults to it, pg v9 will not)"
+    );
+  }
+
+  // The apex 308-redirects to www. Every verification and password-reset link
+  // is built from this value, so an apex setting costs each of them an extra
+  // round trip and drops the referrer on some clients.
+  const appUrl = env.NEXT_PUBLIC_APP_URL?.trim();
+  if (appUrl) {
+    try {
+      const u = new URL(appUrl);
+      if (u.protocol !== "https:") {
+        warnings.push("NEXT_PUBLIC_APP_URL is not https — email and push links will be insecure");
+      }
+      if (/^wmnyshiftswap\.com$/i.test(u.hostname)) {
+        warnings.push(
+          "NEXT_PUBLIC_APP_URL is the apex host — it 308-redirects to www.wmnyshiftswap.com, so every verification and reset link takes an extra hop. Use the www host."
+        );
+      }
+      // Checked on the raw string, not u.pathname: a trailing slash normalizes
+      // to pathname "/" and becomes invisible to the parser, while the raw
+      // value is what gets concatenated into `${APP_URL}/reset-password/...`
+      // and produces a double slash in the emailed link.
+      if (appUrl.endsWith("/")) {
+        warnings.push("NEXT_PUBLIC_APP_URL has a trailing slash — links built from it will contain a double slash");
+      } else if (u.pathname !== "/") {
+        warnings.push("NEXT_PUBLIC_APP_URL should be an origin with no path");
+      }
+    } catch {
+      /* shape already reported as a problem by urlCheck */
+    }
+  }
+
+  // A cron that fails never pings, and silence is the alarm — but only if
+  // something is listening. Unset, the entire cron failure-detection story is
+  // "nobody finds out".
+  if (!env.HEARTBEAT_URL_BASE?.trim()) {
+    warnings.push(
+      "HEARTBEAT_URL_BASE is unset — a failing or never-registered cron job produces no alert anywhere. All six crons are daily; configure dead-man periods to match."
+    );
+  }
+
+  // Deliverability depends on this matching a verified sending domain. Catching
+  // the onboarding placeholder is worth the two lines.
+  const from = env.EMAIL_FROM?.trim();
+  if (from && /@resend\.dev>?$/i.test(from)) {
+    warnings.push(
+      "EMAIL_FROM is still a @resend.dev address — mail will send but not from your verified domain, which hurts deliverability"
+    );
+  }
+
+  return warnings;
 }
 
 /** Pure: check a given environment. Exported for tests. */
@@ -110,12 +194,27 @@ export function validateEnv(
     }
   }
 
-  return { ok: problems.length === 0, problems };
+  return { ok: problems.length === 0, problems, warnings: collectWarnings(env, isProduction) };
 }
 
-/** Throws on invalid environment. Called at startup from instrumentation.ts. */
+/**
+ * Throws on invalid environment; logs warnings. Called at startup from
+ * instrumentation.ts.
+ *
+ * Warnings are printed before the throw so that a boot which is about to fail
+ * still reports everything wrong in one pass — otherwise you fix one variable,
+ * redeploy, and discover the next.
+ */
 export function assertEnv(env: EnvLike = process.env): void {
-  const { ok, problems } = validateEnv(env);
+  const { ok, problems, warnings } = validateEnv(env);
+
+  if (warnings.length > 0) {
+    console.warn(
+      `[env] ${warnings.length} configuration warning(s) — not fatal, but each one is a real defect:\n` +
+        warnings.map((w) => `  • ${w}`).join("\n"),
+    );
+  }
+
   if (ok) return;
 
   const detail = problems.map((p) => `  • ${p}`).join("\n");

@@ -523,6 +523,159 @@ passes; a monitored mailbox and named on-call owner for abuse reports.
 
 ---
 
+## 5b. Third pass — 2026-09-27, PWA and outage resilience
+
+Four defects found while working the remaining punch list. All four are code-side
+and closed; none were in any previous audit.
+
+### The Redis outage also took down the PWA shell
+
+This is the most serious of the four, and it is a second symptom of the same
+2026-09-27 Upstash hibernation that produced the 429s on login.
+
+`middleware.ts` runs the force-logout check for every non-`/api/` path, and in
+production it returns `503 {"error":"Session validation temporarily
+unavailable"}` when Redis cannot be reached. The matcher excluded only
+`_next/static`, `_next/image` and `favicon.ico`. So for any signed-in user, a
+sleeping Upstash instance returned that JSON 503 for:
+
+- `/sw.js` — the service worker script
+- `/manifest.json` — the install manifest
+- `/icons/*` — every app icon
+- every page navigation, as JSON rather than an HTML error page
+
+The offline shell exists precisely to cover an outage like this, and the outage
+took it out. A returning user could not load the app, could not install it, and
+the service worker could not update.
+
+Fixed in `lib/publicAssets.ts` + `middleware.ts`: those paths are removed from
+the matcher (so middleware is never invoked for them) and an `isPublicAsset()`
+guard short-circuits at the top of the handler as a second lock. None of them
+carries user data, so no guarantee is weakened; it also removes a Redis
+round-trip from every icon request. The guard sits above `MAINTENANCE_MODE`,
+which previously allowed `/icons/` and `/manifest.json` but not `/sw.js` — so a
+maintenance window redirected the worker request to `/maintenance` and the worker
+cached the redirect. `test/publicAssets.test.ts` asserts the matcher and the
+predicate agree, and that app routes are still covered.
+
+### iOS push was dead on arrival, and it crashed the component
+
+`NotifToggle` and `PushBanner` both guarded on `serviceWorker` and `PushManager`
+and then read `Notification.permission`. On iOS Safari in an ordinary browser tab
+that is a crash: `PushManager` IS on the window from 16.4, but `Notification` is
+exposed only inside an installed home-screen app, so the read threw a TypeError
+synchronously in a mount effect where the `.catch()` could not see it.
+
+`components/InstallPrompt.tsx` already had the correct `"Notification" in window`
+guard, which is how we know this was an oversight rather than a deliberate
+difference between the three.
+
+Two further defects in the same flow:
+
+- No standalone-mode gate. In a tab, iOS rejects `pushManager.subscribe()`, and
+  the handler's `catch {}` swallowed it — so the user tapped the toggle, nothing
+  happened, and nothing said why.
+- The VAPID key was fetched inside the click handler, before `subscribe()`.
+  Safari ties the permission prompt to the user gesture, and an intervening
+  `await fetch(...)` can lose it.
+
+Fixed by extracting `lib/pushSupport.ts` (pure, the same split as
+`lib/installPrompt.ts`) and `lib/usePush.ts` (one shared flow instead of two
+near-identical copies). iOS-in-a-tab now reports `needs-install` and says so.
+Failures surface instead of being swallowed. The key is prefetched at mount so
+`subscribe()` is the first await after the click. Registration passes
+`updateViaCache: "none"` per the Next.js PWA guide.
+
+`test/pushSupport.test.ts` covers the support matrix and includes a source guard
+asserting no component reads the Notification API directly. Verified against the
+pre-fix sources: both matched, so the guard would have caught this.
+
+### The service worker install could fail outright, and its cache never rotated
+
+`cache.addAll(SHELL_URLS)` is all-or-nothing. `/depots` redirects for a
+signed-out visitor, which is enough to reject the promise and fail the install —
+leaving **no service worker at all**: no offline shell and no push. Now
+`Promise.allSettled` over individual `cache.add()` calls, so a partial shell
+beats no worker.
+
+`CACHE_NAME` was a hand-bumped literal (`wmny-shell-v2`). `activate` only deletes
+caches whose name differs, so a forgotten bump kept the previous deploy's cached
+navigation HTML — pointing at `/_next/static/` hashes that no longer existed, a
+blank page for returning and offline users — and the cache grew without bound.
+`scripts/stamp-sw.mjs` now rewrites it to `wmny-shell-<sha7>` during
+`vercel-build`. It rewrites the committed file in place rather than generating it
+from a template: if the step is ever skipped, the worker still works with a
+static name, whereas a template-only approach would ship no worker at all. It
+no-ops without `VERCEL_GIT_COMMIT_SHA` so local builds leave the tree clean.
+
+### 429 vs 503 — the login outage told users the wrong thing
+
+Fail-closed rate limiting plus a sleeping Redis returned `429 Too many attempts`
+on every login. Nobody was throttled. The status code told users to wait and
+told whoever read the logs to look for abuse, so the actual cause stayed hidden
+longer than it needed to. A 429 also invites client backoff-and-retry, which is
+wrong for an outage that needs a human to wake the database.
+
+`lib/rateLimit.ts` now returns a `RateLimitOutcome` discriminating `limited` /
+`unavailable` / `unattributable`. The deny decision is unchanged — failing closed
+is still the policy. `rateLimitResponse()` maps `unavailable` to 503 with
+`Retry-After`, and the five auth routes (login, register, forgot-password,
+reset-password, resend-verification) use it. Their "rate limit hit" Sentry events
+are now gated on `reason === "limited"`, so an outage no longer floods Sentry
+with events that read like credential stuffing. `unattributable` deliberately
+stays a 429 — a distinct status there would tell an attacker which requests the
+limiter could not attribute.
+
+The boolean `rateLimit()` / `rateLimitByIp()` remain for the ~22 non-auth call
+sites, where a mislabelled 429 on "save a swap" is not worth a wide refactor of
+security-critical code that could not be integration-tested in this environment.
+
+### Environment checks: three dashboard items became boot assertions
+
+`lib/env.ts` gained a `warnings` channel, separate from `problems`. Warnings are
+logged loudly at boot and do **not** throw, because each of these is live in
+production right now and promoting any of them to a hard failure would turn the
+next deploy into an outage over a config nit:
+
+- `DATABASE_URL` without `sslmode=verify-full` (`pg` v9 stops verifying the
+  server certificate for `require`)
+- `NEXT_PUBLIC_APP_URL` set to the apex, which 308s to `www`, or carrying a
+  trailing slash that produces double slashes in emailed links
+- `HEARTBEAT_URL_BASE` unset, which is the whole cron failure-detection story
+- `EMAIL_FROM` still on `@resend.dev`
+
+Items 5, 6 and 7 of §5 above are still open in the sense that the values need
+changing — but they now announce themselves on every boot instead of waiting for
+someone to check a dashboard.
+
+### What was NOT done, and why
+
+- **No cron-run table.** Recording cron runs in Postgres would make a
+  never-registered cron job observable from `/api/health`. It needs a new Prisma
+  model, and this environment cannot reach `binaries.prisma.sh` to regenerate the
+  client, so the code could not be typechecked. Adding a model that the code
+  reaches by raw SQL purely to work around a sandbox limitation is not something
+  that belongs in this repository. Whether the six crons are registered is a
+  ten-second look at Vercel → Settings → Cron Jobs, and remains a §5 item.
+- **No cron consolidation.** Collapsing six daily jobs into one dispatcher would
+  fit a two-cron plan cap, but the six run at six different times (05:00, 08:00,
+  09:00, 12:00, 13:00, 13:15) and changing when the daily digest sends is a
+  product decision, not a technical one. It also solves a problem not yet
+  confirmed to exist.
+- **No cron batching.** `agreement-followups` and `expire-swaps` still rely on
+  `maxDuration = 300`. A scale concern at zero users; it stays on the accepted
+  list.
+
+### Verification status of this pass
+
+`tsc --noEmit` clean, `npm run lint` clean at 0 errors, and 126 tests passing
+with 24 DB-gated tests skipped. `npm run build` and the DB-backed suite could
+**not** be run here: this environment's proxy blocks `fonts.googleapis.com`
+(next/font fails) and `binaries.prisma.sh` (no schema engine). CI runs both, and
+this pass is not verified until CI is green.
+
+---
+
 ## 6. Second-pass changes, in brief
 
 Everything below was open at the end of the first pass and is now closed. Details
