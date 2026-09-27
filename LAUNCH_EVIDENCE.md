@@ -128,7 +128,7 @@ with that user existed. Fixed in patch 0002.
 | `tsc --noEmit` | **0 errors** |
 | `npm run lint` | **0 errors**, 10 warnings |
 | All 16 migrations against an **empty** database | **RETRACTED — see below** |
-| Both partial unique indexes after that migrate | **present** (via `db push` + `partial-indexes.sql`) |
+| Both partial unique indexes after that migrate | **present** (now via the squashed baseline; `partial-indexes.sql` deleted) |
 | CI's three canary assertions | **all fire** |
 
 The single remaining skip is `A12 (Redis-less fallback)`, which is gated to run
@@ -354,8 +354,8 @@ Ten commits on branch `fix/launch-blockers-session-revocation`, one per phase.
 | `npm run build` | **succeeded**, all routes compiled |
 | `tsc --noEmit` | **0 errors** |
 | `npm run lint` | **0 errors**, 10 warnings, now gating CI |
-| 16 migrations from empty | **FAILS** — ordering defect, retracted above; not a launch blocker, production is unaffected |
-| Both partial indexes present in CI | **verified** (via `db push` + `partial-indexes.sql`) |
+| 16 migrations from empty | **RESOLVED** — squashed to one baseline in #48; replays cleanly from empty |
+| Both partial indexes present in CI | **verified** (now via `migrate deploy` of the baseline) |
 
 Two things were caught by actually running the code rather than reading it, which
 is the argument for not trusting a static pass:

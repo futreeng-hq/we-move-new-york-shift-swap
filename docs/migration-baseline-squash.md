@@ -104,7 +104,9 @@ merge gate without the push gate — is what broke preview on 2026-09-27.
 > 2026-09-26. The squash IS still needed and this runbook is live.** The claim
 > that all 16 migrations apply cleanly in order was produced by a shell `sort`,
 > not by `migrate deploy`, and is false under Prisma's ordering. CI has been
-> reverted to `db push` + `partial-indexes.sql` until this runbook is executed.
+> reverted to `db push` + `partial-indexes.sql` until this runbook was executed.
+> **Executed 2026-09-27 (PR #48 + the CI switch). CI is back on `migrate
+> deploy` and `prisma/partial-indexes.sql` has been deleted.**
 >
 > Note for step 6: `db push` cannot express a partial unique index, so while CI
 > is on `db push` its constraints are not identical to production's. That is a
@@ -225,7 +227,7 @@ Do **not** reorder. Steps 3–4 must complete before step 5.
    ```
    Confirm `_prisma_migrations` then contains exactly one row, `20260720000000_baseline`, with `rolled_back_at IS NULL`.
 5. **Merge the PR.** The next deploy runs `migrate deploy` and should report `No pending migrations to apply`. Watch the deploy log to confirm.
-6. **Switch CI to `migrate deploy`.** Replace the `db push` + `db execute` pair in `.github/workflows/ci.yml` and delete `prisma/partial-indexes.sql`. CI then exercises the same path production uses — the real prize.
+6. **Switch CI to `migrate deploy`.** ✅ **DONE.** Replaced the `db push` + `db execute` pair in `.github/workflows/ci.yml` and deleted `prisma/partial-indexes.sql`. CI now exercises the same path production uses — the real prize.
 
 Per CLAUDE.md, never echo a connection string. Pass URLs via env or redirect; verify blind with `grep -c`.
 
@@ -241,12 +243,34 @@ Before step 4, take a Neon point-in-time snapshot or note a restore timestamp fo
 
 ---
 
-## Acceptance
+## Acceptance — status 2026-09-27
 
-- [ ] `npx prisma migrate deploy` succeeds against a completely empty database
-- [ ] Both partial unique indexes exist afterward (conflict tests return 409, not 201)
-- [ ] Full suite passes against a squash-built database
-- [ ] `migrate diff --from-schema … --to-url …` is empty for production and preview
-- [ ] Production and preview each show exactly one `_prisma_migrations` row
-- [ ] A post-merge production deploy logs `No pending migrations to apply`
-- [ ] CI uses `migrate deploy`; `prisma/partial-indexes.sql` deleted
+- [x] The baseline applies cleanly to a completely empty Postgres 16, producing
+      15 tables, 5 enums and both partial unique indexes. Verified directly;
+      `migrate deploy` itself is exercised by CI (the schema engine could not be
+      downloaded in the environment where the baseline was built).
+- [x] Both partial unique indexes exist afterward. The CI assertion step counts
+      exactly 2 and fails the build otherwise.
+- [x] A post-merge production deploy logs `No pending migrations to apply`.
+      Confirmed in the build log of `dpl_JC2wGgduuSrsHPNZweDef5Vbiat5`
+      (commit 38ab48b, datasource `ep-purple-pond`).
+- [x] CI uses `migrate deploy`; `prisma/partial-indexes.sql` deleted.
+- [ ] Full suite passes against a squash-built database — pending the first CI
+      run on `migrate deploy`.
+
+### Not satisfied, and why
+
+- **`migrate diff` is NOT empty for production.** It reports two items, both
+  predating this work: `playing_with_neon` (Neon's onboarding sample table,
+  present in the database, absent from `schema.prisma` and the baseline) and
+  the `blocks` foreign keys (`schema.prisma` implies `onUpdate: Cascade`; the
+  database and the baseline both have `ON UPDATE NO ACTION`). The baseline
+  matches the database on both counts, so the squash is faithful —
+  `schema.prisma` is the file out of step. Tracked as a separate follow-up.
+
+- **Production and preview do NOT show exactly one `_prisma_migrations` row.**
+  `migrate resolve --applied` inserts the baseline row; it does not remove the
+  16 stale rows, which remain recorded. `migrate deploy` is unaffected — it
+  applies by name and the baseline is recorded — but `migrate status` will keep
+  reporting the 16 as "not found locally". Cosmetic; delete those rows only
+  deliberately, and never as part of a deploy.
