@@ -2,7 +2,7 @@
 // Analytics wrapper — Google Analytics 4
 // All calls are no-ops if window/gtag is not available.
 
-import { redactSensitivePath } from "@/lib/sensitiveUrl";
+import { redactSensitivePath, redactSensitiveUrl } from "@/lib/sensitiveUrl";
 
 const GA_ID = "G-RJV2G8G06H";
 
@@ -44,12 +44,29 @@ export function track(event: string, props?: Record<string, unknown>) {
 
 // Typed event helpers
 export const analytics = {
-  // page_path is redacted because /reset-password/<jwt> and
-  // /verify-email/<token> carry a live credential in the path. layout.tsx sets
-  // send_page_view:false so this is the only page_view GA receives — if that is
-  // ever re-enabled, gtag's automatic page_location will leak the raw token again.
-  pageView: (path: string) =>
-    gtag("event", "page_view", { page_path: redactSensitivePath(path), send_to: GA_ID }),
+  // /reset-password/<jwt> and /verify-email/<token> carry a live
+  // account-takeover credential in the path, so BOTH of GA4's location
+  // parameters have to be overridden:
+  //
+  //   page_path     -> 'dp'  (what we send on this event)
+  //   page_location -> 'dl'  (attached automatically to EVERY hit, read from
+  //                           window.location.href)
+  //
+  // Redacting page_path alone was not enough and leaked a real token to GA in
+  // production: enhanced-measurement events such as scroll, which we never
+  // fire ourselves, still carried the raw URL in 'dl'. gtag("set") pins the
+  // redacted value as a global parameter so those automatic hits inherit it
+  // too, not just the page_view below.
+  pageView: (path: string) => {
+    const redactedPath = redactSensitivePath(path);
+    if (typeof window !== "undefined") {
+      gtag("set", {
+        page_path: redactedPath,
+        page_location: redactSensitiveUrl(window.location.href),
+      });
+    }
+    gtag("event", "page_view", { page_path: redactedPath, send_to: GA_ID });
+  },
 
   // Auth
   signupStarted: () => track("signup_started"),

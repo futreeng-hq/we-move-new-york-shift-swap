@@ -4,6 +4,7 @@ import {
   isSensitivePath,
   redactSensitivePath,
   redactSensitiveUrl,
+  SENSITIVE_PATH_PREFIXES,
 } from "../lib/sensitiveUrl";
 import { scrubDeep, scrubEvent } from "../lib/sentryScrub";
 
@@ -121,4 +122,44 @@ test("scrubEvent redacts the request URL and drops cookies and query strings", (
 
   // The whole event, serialized, must not contain the credential anywhere.
   assert.ok(!JSON.stringify(out).includes(JWT));
+});
+
+// Regression: GA4 sends BOTH page_path ('dp') and page_location ('dl'), and
+// 'dl' is attached automatically to every hit from window.location.href —
+// including enhanced-measurement events like scroll that the app never fires.
+// Redacting only page_path shipped to production and leaked a live reset JWT
+// to Google Analytics: observed dp=/reset-password/[redacted] alongside
+// dl=https://www.wmnyshiftswap.com/reset-password/<the real token>.
+//
+// app/layout.tsx duplicates the prefix list in an inline script (it cannot
+// import this module) to pin page_location before the first hit. If that list
+// drifts from SENSITIVE_PATH_PREFIXES, the leak comes back silently.
+test("the inline gtag script in layout.tsx covers every sensitive prefix", async () => {
+  const { readFileSync } = await import("node:fs");
+  const layout = readFileSync(new URL("../app/layout.tsx", import.meta.url), "utf8");
+
+  // page_location must be set on the gtag config, not just page_path.
+  assert.match(
+    layout,
+    /gtag\('config'[\s\S]*page_location/,
+    "layout.tsx must pin page_location on the gtag config — page_path alone leaks 'dl'",
+  );
+
+  for (const prefix of SENSITIVE_PATH_PREFIXES) {
+    assert.ok(
+      layout.includes(`'${prefix}'`),
+      `layout.tsx inline SENSITIVE list is missing ${prefix} — it must stay in sync with lib/sensitiveUrl.ts`,
+    );
+  }
+});
+
+test("redactSensitiveUrl strips the credential from an absolute page_location", () => {
+  assert.equal(
+    redactSensitiveUrl(`https://www.wmnyshiftswap.com/reset-password/${JWT}`),
+    "https://www.wmnyshiftswap.com/reset-password/[redacted]",
+  );
+  assert.equal(
+    redactSensitiveUrl("https://www.wmnyshiftswap.com/board"),
+    "https://www.wmnyshiftswap.com/board",
+  );
 });
