@@ -670,9 +670,102 @@ someone to check a dashboard.
 
 `tsc --noEmit` clean, `npm run lint` clean at 0 errors, and 126 tests passing
 with 24 DB-gated tests skipped. `npm run build` and the DB-backed suite could
-**not** be run here: this environment's proxy blocks `fonts.googleapis.com`
-(next/font fails) and `binaries.prisma.sh` (no schema engine). CI runs both, and
-this pass is not verified until CI is green.
+not be run in the authoring environment (its proxy blocks `fonts.googleapis.com`
+and `binaries.prisma.sh`).
+
+**CI ran both and passed** — PR #51, merged as `75bcff7`. The test job reported
+126 tests / 125 passed / 0 failed / 1 skipped on the concurrent suite plus 8/8
+on the isolated one; the single skip is the expected `A12 (Redis-less
+fallback)`. The 24 DB-gated tests that skip locally all executed, including
+`growth.test.ts`, which exercises the `rateLimitStatusByIp` conversion in
+`register/route.ts`. `migrate deploy` built the database from the squashed
+baseline in 1s and the partial-index assertion passed. The build job compiled
+with the new middleware matcher.
+
+Verified live on production afterwards: `/sw.js` serves `CACHE_NAME =
+"wmny-shell-75bcff7"`, confirming both that the stamp runs on Vercel and that
+the service worker is reachable rather than sitting behind the session check.
+
+---
+
+## 5c. Incident — 2026-09-27, Upstash credential change
+
+Logged because the post-mortem produced two code changes and one process change.
+
+### What happened
+
+The Upstash free tier was upgraded to Pay as You Go, closing the hibernation
+risk that caused the original login outage. While making that change the
+`UPSTASH_REDIS_REST_TOKEN` was replaced with the database's **redis-cli
+password** rather than its **REST/HTTP auth token**. These are two different
+secrets on two different tabs of the Upstash console, and they are not
+interchangeable: the password works only with traditional Redis clients, while
+anything speaking HTTP needs the REST token.
+
+Every request then failed authentication. Because the limiter fails closed, that
+meant 503 on login. Production was rolled back twice, for roughly 80 seconds
+each time, before the cause was found.
+
+### Why it took an hour
+
+`redisHealth()` caught the exception bare and returned
+`{"state":"unreachable"}`. Upstash had been returning
+`WRONGPASS invalid or missing auth token` from the first attempt; the message
+was discarded at the catch. Four successive explanations were proposed and
+tested against production — wrong database, mismatched URL/token pair,
+read-only token, stale environment snapshot — when reading the actual error
+would have ended it immediately.
+
+The error was eventually recovered by POSTing an empty body to
+`/api/auth/forgot-password` on a preview deployment, which runs the limiter
+before it parses, and reading `[rateLimit] Redis error` out of the runtime log.
+
+### Changes made
+
+- **`redisHealth()` now logs the provider message** (`lib/rateLimit.ts`). Server
+  log only — `/api/health` is public and unauthenticated, so its body still
+  carries nothing but state and latency. `test/rateLimitOutcome.test.ts` asserts
+  both halves: that the message is logged, and that the returned object has no
+  field beyond `state` and `latencyMs`.
+- **The two silent branches in the force-logout check now log** (`middleware.ts`).
+  Both returned 503 with nothing written anywhere.
+
+### Process change: test the deployment, then promote
+
+The first two attempts promoted straight to production and were caught by users'
+requests. Every attempt after that used the deployment's own URL:
+
+1. Build with `create_deployment` (target production). A rollback pin means the
+   build does not take the production alias on its own.
+2. Check `https://<deployment-url>/api/health` — the SSO wall passes for a
+   signed-in Vercel session.
+3. Exercise a write path, not just `PING`. `POST /api/auth/forgot-password` with
+   `{}` returns `400 Email required` when the limiter's `INCR` succeeded, and
+   `503` when it did not. `PING` alone would pass with a read-only token.
+4. Promote only after both are green.
+
+The successful fix went out this way with zero downtime.
+
+### Not done: the `middleware` → `proxy` migration
+
+Next 16 deprecates the `middleware` file convention in favour of `proxy`, and
+the build log says so on every deploy. It is **deliberately not migrated**.
+
+The rename itself is mechanical — file name, function name, and a codemod
+exists. But `proxy` **forces the Node.js runtime**: the docs state the `runtime`
+config option is unavailable in Proxy files and throws if set. Migrating would
+therefore move the force-logout check off the edge and into a regional Node
+function, which is a real behavioural change to an auth-critical path, adopted
+for no functional gain beyond silencing a build warning.
+
+`middleware.ts` still works in 16.3.5 — this is a deprecation, not a removal.
+The one thing that would have been lost, the `x-middleware-subrequest` guard
+against the CVE-2025-29927 bypass class, turns out not to be a consideration:
+the string appears nowhere in `next/dist` at 16.3.5, so that mechanism is gone
+from the framework entirely and the check is inert either way.
+
+Revisit after launch, with real traffic to measure the latency change against,
+and verify on a preview deployment before promoting.
 
 ---
 

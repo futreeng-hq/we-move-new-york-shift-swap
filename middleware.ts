@@ -84,6 +84,11 @@ export async function middleware(req: NextRequest) {
         const store = getRedis();
         if (!store) {
           if (process.env.NODE_ENV === "production") {
+            // Both branches here used to fail silently. A 503 with no log line
+            // tells whoever is paging through the logs nothing about why, which
+            // is exactly the hole that made the 2026-09-27 credential incident
+            // take as long as it did. Never log the URL or token themselves.
+            console.error("[proxy] force-logout check skipped: Upstash is not configured in production");
             return NextResponse.json({ error: "Session validation temporarily unavailable" }, { status: 503 });
           }
         } else {
@@ -92,7 +97,11 @@ export async function middleware(req: NextRequest) {
             if (val && payload.iat * 1000 < Number(val)) {
               return NextResponse.json({ error: "Session invalidated. Please sign in again." }, { status: 401 });
             }
-          } catch {
+          } catch (e) {
+            console.error(
+              "[proxy] force-logout check failed:",
+              e instanceof Error ? e.message : String(e),
+            );
             if (process.env.NODE_ENV === "production") {
               return NextResponse.json({ error: "Session validation temporarily unavailable" }, { status: 503 });
             }
