@@ -2,7 +2,24 @@ name: Uptime Monitor
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # every 5 minutes
+    # Every 15 minutes, not every 5 — and the reason is money, not monitoring.
+    #
+    # /api/health runs `prisma.depot.count()`, a real query against Postgres.
+    # Neon suspends compute after 5 minutes of inactivity, so a probe on a
+    # 5-minute cron raced that timer and the database effectively never slept.
+    # On Neon's Free plan that cost nothing. On a usage-based paid plan, compute
+    # is billed at $0.106/CU-hour, and a database that never sleeps is billed
+    # for all ~730 hours in a month — roughly $19/month at 0.25 CU, ~$77 at 1 CU,
+    # for an app with no users yet. Scale-to-zero was enabled in the Neon console
+    # the whole time; this workflow was quietly preventing it from ever engaging.
+    #
+    # 15 minutes leaves a real idle gap, so the compute actually suspends. The
+    # cost is coarser outage detection: an incident surfaces up to 15 minutes
+    # later instead of 5. For a shift-swap board that is an acceptable trade —
+    # and once operators are using it daily their own traffic keeps the database
+    # warm during shift-change hours anyway, at which point this is worth
+    # revisiting.
+    - cron: '*/15 * * * *'
   workflow_dispatch:         # allow manual trigger
 
 jobs:
