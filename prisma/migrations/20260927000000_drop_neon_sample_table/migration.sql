@@ -1,0 +1,19 @@
+-- Drop Neon's onboarding sample table.
+--
+-- `playing_with_neon` is created by Neon's "playing with Neon" getting-started
+-- tutorial, not by this application. It is referenced nowhere in the codebase,
+-- is absent from schema.prisma, and is absent from the squashed baseline — so
+-- any database built from this repo has never had it. It exists only in the
+-- long-lived Neon branches (production and preview) as leftover onboarding
+-- state.
+--
+-- Why bother: while it exists, `prisma migrate diff --from-schema
+-- prisma/schema.prisma --to-config-datasource` is permanently non-empty
+-- against those databases. A drift check that always reports drift is a drift
+-- check nobody reads, and it would hide the next real schema divergence.
+--
+-- IF EXISTS is load-bearing, not cosmetic: on a fresh database (CI, a new
+-- environment, a restore from the baseline) this table never existed, and a
+-- bare DROP would fail, record this migration as failed in _prisma_migrations,
+-- and block every later migration with P3009.
+DROP TABLE IF EXISTS "playing_with_neon";
