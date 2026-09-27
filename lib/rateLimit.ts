@@ -55,7 +55,21 @@ export async function redisHealth(): Promise<RedisHealth> {
       ),
     ]);
     return { state: "ok", latencyMs: Date.now() - started };
-  } catch {
+  } catch (e) {
+    // Log the message. This catch used to be bare, and on 2026-09-27 that cost
+    // roughly an hour: a credential mix-up (the redis-cli password pasted where
+    // the REST token belongs) surfaced only as `"redis":{"state":"unreachable"}`,
+    // so the cause was guessed at through two production rollbacks. Upstash had
+    // been saying `WRONGPASS invalid or missing auth token` the whole time — the
+    // answer was one line away and we were throwing it on the floor.
+    //
+    // It goes to the server log ONLY. /api/health is public and unauthenticated
+    // (the uptime workflow polls it with no credentials), so the response shape
+    // stays state + latency and never carries a provider message.
+    console.error(
+      "[redisHealth] Redis unreachable:",
+      e instanceof Error ? e.message : String(e),
+    );
     return { state: "unreachable", latencyMs: Date.now() - started };
   }
 }

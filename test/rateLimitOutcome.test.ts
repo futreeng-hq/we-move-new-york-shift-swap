@@ -132,3 +132,49 @@ test("auth routes only report an abuse signal on a real limit hit", async () => 
     );
   }
 });
+
+// ─── The health probe must report the cause, without leaking it ──────────────
+//
+// Added after the 2026-09-27 credential incident. redisHealth() caught the
+// exception bare, so a WRONGPASS from Upstash reached us as nothing but
+// `"state":"unreachable"` and the real message was guessed at across two
+// production rollbacks. It now logs — to the server, never to the response,
+// because /api/health is public and unauthenticated.
+
+test("redisHealth logs the provider error but keeps it out of the return value", async () => {
+  setEnv("production", "https://definitely-not-a-real-host.upstash.io", "bad-token");
+
+  const original = console.error;
+  const lines: string[] = [];
+  console.error = (...args: unknown[]) => {
+    lines.push(args.map((a) => String(a)).join(" "));
+  };
+
+  let result;
+  try {
+    const { redisHealth } = await import("../lib/rateLimit");
+    result = await redisHealth();
+  } finally {
+    console.error = original;
+  }
+
+  assert.equal(result.state, "unreachable");
+  assert.deepEqual(
+    Object.keys(result).sort(),
+    ["latencyMs", "state"],
+    "the health payload is public — it must carry state and latency only, never a provider message"
+  );
+  assert.ok(
+    lines.some((l) => l.includes("[redisHealth]")),
+    "the cause must reach the server log; a bare catch is what made the incident take an hour"
+  );
+});
+
+test("the public health response shape carries no error detail", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../app/api/health/route.ts", import.meta.url), "utf8");
+  assert.ok(
+    !/message|error:|detail/.test(src.split("const body = {")[1]?.split("};")[0] ?? ""),
+    "/api/health is unauthenticated — its body must not gain an error/message field"
+  );
+});
