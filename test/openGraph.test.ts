@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
 
 const read = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
@@ -48,6 +49,38 @@ test("the root card is static and leaks nothing user-specific", () => {
   const src = read("app/opengraph-image.tsx");
   assert.ok(!/prisma|getPublicSwap|await\s+fetch/.test(src), "the root card must not read user or swap data");
   assert.ok(!/params/.test(src), "the root card takes no params — it is the same for everyone");
+});
+
+// The static assertions above all passed on a card that could not render.
+//
+// next/og draws with Satori, which is not a browser: any element with more than
+// one child must carry an explicit `display`, and a <br /> counts as a child —
+// so `text <br /> text` is three children in a div with no display, and Satori
+// throws. Nothing catches that until `next build` prerenders /opengraph-image,
+// at which point the whole build exits 1. It did, in CI, on PR #53.
+//
+// So this test renders the card for real and checks the bytes are a PNG. It
+// needs no network: @vercel/og bundles its default font.
+type RenderCard = () => { arrayBuffer: () => Promise<ArrayBuffer> };
+
+test("the root card actually renders to a PNG", async () => {
+  // Unwrapped rather than default-imported: the loader can hand back either the
+  // function or a { default } wrapper depending on interop, and a test that
+  // fails on the wrapper shape would be testing the loader, not the card.
+  const mod = (await import("../app/opengraph-image")) as unknown as {
+    default: RenderCard | { default: RenderCard };
+  };
+  const render = typeof mod.default === "function" ? mod.default : mod.default.default;
+
+  const res = await render();
+  const bytes = Buffer.from(await res.arrayBuffer());
+
+  assert.equal(
+    bytes.subarray(0, 8).toString("hex"),
+    "89504e470d0a1a0a",
+    "the card must render to a real PNG — a Satori layout error here fails `next build`"
+  );
+  assert.ok(bytes.length > 1000, "a PNG this small means the card rendered empty");
 });
 
 // Verified on a real installed iPhone on 2026-09-27: nothing is clipped,

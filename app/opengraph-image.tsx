@@ -47,10 +47,24 @@ export default function Image() {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column" }}>
-          <div style={{ fontSize: 82, fontWeight: 800, color: "#fff", lineHeight: 1.05 }}>
-            Swap shifts with
-            <br />
-            operators you trust
+          {/* Satori (what next/og renders with) is not a browser. Any element
+              with more than one child MUST carry an explicit display value, and
+              a <br /> counts as a child: text + <br /> + text is three children.
+              Without it the build does not warn — it fails the prerender of
+              /opengraph-image and takes the whole `next build` down with it.
+              So the two lines are two flex children, not one div with a break. */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              fontSize: 82,
+              fontWeight: 800,
+              color: "#fff",
+              lineHeight: 1.05,
+            }}
+          >
+            <div>Swap shifts with</div>
+            <div>operators you trust</div>
           </div>
           <div style={{ fontSize: 36, color: WMNY_GOLD, marginTop: 20, fontWeight: 600 }}>
             Built by a 32-year transit veteran
