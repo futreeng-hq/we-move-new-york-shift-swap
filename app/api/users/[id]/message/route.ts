@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, checkActive } from "@/lib/auth";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, rateLimitByIp, clientIp } from "@/lib/rateLimit";
 import { parseBody, BODY_2KB } from "@/lib/parseBody";
@@ -9,7 +9,7 @@ import { notifyUser } from "@/lib/notifyUser";
 // POST /api/users/:id/message → send a direct message to any operator (not tied to a swap)
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const ip = clientIp(req);
   if (!await rateLimitByIp(ip, "dm:ip", 60, 3_600_000)) return err("Rate limit exceeded — too many messages from this network", 429);

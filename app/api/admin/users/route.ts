@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import * as Sentry from "@sentry/nextjs";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { writeAuditLog } from "@/lib/audit";
@@ -8,7 +9,7 @@ import { blockUserAccessTokens } from "@/lib/tokenBlocklist";
 
 export async function GET(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.userId } });
   if (!dbUser || !["admin", "subAdmin"].includes(dbUser.role)) return err("Forbidden", 403);
@@ -41,7 +42,7 @@ export async function GET(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.userId } });
   if (!dbUser || dbUser.role !== "admin") return err("Forbidden", 403);
@@ -65,7 +66,6 @@ export async function PATCH(req: NextRequest) {
 
   const updated = await prisma.user.update({
     where: { id: userId },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     data: {
       ...(role !== undefined && { role }),
       ...(depotId !== undefined && {
@@ -85,8 +85,19 @@ export async function PATCH(req: NextRequest) {
   // privileges for the remainder of their token.
   const wasSuspended = suspendedUntil !== undefined && new Date(suspendedUntil) > new Date();
   const wasRoleChanged = role !== undefined && role !== target.role;
+  let sessionsRevoked = true;
   if (wasSuspended || wasRoleChanged) {
-    await blockUserAccessTokens(userId);
+    // Report the failure instead of dropping it: if the marker cannot be
+    // written the suspended or demoted user keeps their current access token
+    // for up to 15 more minutes, and the admin needs to know that.
+    sessionsRevoked = await blockUserAccessTokens(userId);
+    if (!sessionsRevoked) {
+      Sentry.captureMessage("blockUserAccessTokens failed after admin suspension/role change", {
+        level: "error",
+        tags: { route: "admin/users PATCH" },
+        extra: { targetUserId: userId },
+      });
+    }
   }
 
   // When a user is suspended, also invalidate their unused invite codes.
@@ -112,12 +123,14 @@ export async function PATCH(req: NextRequest) {
     ip,
   });
 
-  return ok(updated);
+  // sessionsRevoked is surfaced so the admin UI can warn that a suspended or
+  // demoted user may retain access for up to 15 minutes.
+  return ok({ ...updated, sessionsRevoked });
 }
 
 export async function DELETE(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.userId } });
   if (!dbUser || dbUser.role !== "admin") return err("Forbidden", 403);
@@ -131,19 +144,38 @@ export async function DELETE(req: NextRequest) {
   const target = await prisma.user.findUnique({ where: { id: userId }, select: { email: true, firstName: true, lastName: true } });
   if (!target) return err("User not found", 404);
 
-  // Anonymize instead of hard delete to preserve swap/agreement history
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      email: `deleted_${userId}@deleted.invalid`,
-      passwordHash: "deleted",
-      firstName: "Deleted",
-      lastName: "User",
-      avatarUrl: null,
-      depotId: null,
-      pushSubscriptions: { deleteMany: {} },
-    },
-  });
+  // Anonymize instead of hard delete to preserve swap/agreement history.
+  // Swap.posterName and Swap.contact are denormalized copies of the user's
+  // identity and contact details, so they must be cleared here too — otherwise
+  // the name and phone number stay on the board and on the public teaser.
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: userId },
+      data: {
+        email: `deleted_${userId}@deleted.invalid`,
+        passwordHash: "deleted",
+        firstName: "Deleted",
+        lastName: "User",
+        avatarUrl: null,
+        depotId: null,
+        pushSubscriptions: { deleteMany: {} },
+      },
+    }),
+    prisma.swap.updateMany({
+      where: { userId },
+      data: { posterName: "Deleted User", contact: null },
+    }),
+  ]);
+
+  // Deletion must also end live sessions; without this the deleted account
+  // keeps full API access until its access token expires.
+  if (!await blockUserAccessTokens(userId)) {
+    Sentry.captureMessage("blockUserAccessTokens failed after admin account deletion", {
+      level: "error",
+      tags: { route: "admin/users DELETE" },
+      extra: { targetUserId: userId },
+    });
+  }
 
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? undefined;
   writeAuditLog({
@@ -151,7 +183,9 @@ export async function DELETE(req: NextRequest) {
     action: "user_delete",
     targetId: userId,
     targetType: "user",
-    detail: `Deleted account: ${target.firstName} ${target.lastName} (${target.email})`,
+    // targetId identifies the account; the email is deliberately omitted so
+    // the deletion does not leave the address behind in the audit log.
+    detail: "Deleted account",
     ip,
   });
 

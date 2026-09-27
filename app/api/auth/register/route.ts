@@ -56,13 +56,29 @@ export async function POST(req: NextRequest) {
   const hasSpecialOrMixed = /[^a-zA-Z0-9]/.test(password) || (hasLetter && hasNumber);
   if (!hasSpecialOrMixed) return err("Password must contain letters and numbers", 400);
 
+  // Check the invite code BEFORE answering whether the email exists. Otherwise
+  // any garbage code enumerates the membership: the 409 "Email already
+  // registered" came back before the code was ever validated (validation
+  // happens inside the transaction below), so an attacker needed no valid
+  // invite at all — just 5 guesses per hour per IP against a list of addresses.
+  //
+  // This is a read-only pre-check for the error ordering. The transaction below
+  // still does the atomic claim, which is what actually prevents two
+  // simultaneous registrations consuming the same code.
+  const codeUpperPrecheck = (inviteCode as string).trim().toUpperCase();
+  const invitePrecheck = await prisma.inviteCode.findFirst({
+    where: { code: codeUpperPrecheck, isValid: true },
+    select: { id: true },
+  });
+  if (!invitePrecheck) return err("Invalid or already-used invite code", 400);
+
   const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
   if (existing) return err("Email already registered", 409);
 
   const passwordHash = await bcrypt.hash(password, 10);
   const verifyToken = crypto.randomBytes(32).toString("hex");
 
-  let newCodes: string[] = [];
+  const newCodes: string[] = [];
   let user;
 
   {

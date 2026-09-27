@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, checkActive } from "@/lib/auth";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rateLimit";
 import { ok, err } from "@/lib/apiResponse";
@@ -10,7 +10,7 @@ import { Prisma } from "@prisma/client";
 // GET /api/users/me/notification-prefs → merged prefs + quiet hours
 export async function GET(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
   const settings = await getPrefs(user.userId);
   return ok(settings);
 }
@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
 // (NOT over defaults), so unset keys keep tracking future default changes.
 export async function PUT(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   if (!await rateLimit(`notifprefs:${user.userId}`, 20, 3_600_000)) {
     return err("Rate limit: too many preference updates", 429);

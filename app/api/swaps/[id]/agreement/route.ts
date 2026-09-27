@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, checkActive } from "@/lib/auth";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { rateLimit } from "@/lib/rateLimit";
@@ -8,6 +8,7 @@ import { notifyUser, notifyMany } from "@/lib/notifyUser";
 import { parseBody, BODY_4KB } from "@/lib/parseBody";
 import { assertRowsUpdated, isFinalizedConflict } from "@/lib/agreementGuard";
 import { nyToday } from "@/lib/nyDate";
+import { checkSwapAccess } from "@/lib/accessScope";
 
 // Trust v2: proposals don't lock the swap. Multiple concurrent pending
 // proposals per swap are allowed (from different users — one per user via
@@ -26,7 +27,7 @@ function computeShiftDate(swap: { date: Date | null; fromDate: Date | null; toDa
 // POST /api/swaps/:id/agreement  → propose a swap (does NOT lock the swap)
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const { id } = await params;
 
@@ -45,19 +46,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (swap.status !== "open") return err("This swap is no longer open", 400);
   if (swap.userId === user.userId) return err("Cannot create agreement on your own swap", 400);
 
-  // Block check — symmetric, mirrors messages and interest routes.
-  // Blocked users can still hit this endpoint via stale deep-links since the
-  // browse/get routes filter them out from list responses.
-  const block = await prisma.block.findFirst({
-    where: {
-      OR: [
-        { blockerId: user.userId, blockedId: swap.userId },
-        { blockerId: swap.userId, blockedId: user.userId },
-      ],
-    },
-    select: { id: true },
-  });
-  if (block) return err("Unable to create agreement", 403);
+  // Depot scoping and the symmetric block check. Blocked or foreign-depot
+  // users can still hit this endpoint via stale deep-links, since the
+  // browse/get routes only filter them out of list responses. Without the
+  // depot half, a user from another depot could create a real agreement on
+  // this swap, notify the owner, and expose their own full name to them.
+  const denied = await checkSwapAccess(user.userId, swap);
+  if (denied) return err(denied.message, denied.status);
 
   const body = await parseBody(req, BODY_4KB);
   if (body instanceof NextResponse) return body;
@@ -105,7 +100,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 // GET /api/swaps/:id/agreement?list=1   → owner only: all agreements on the swap
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const { id } = await params;
   const { searchParams } = new URL(req.url);
@@ -158,9 +153,21 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 // confirm (legacy userA_confirmed compat only).
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const { id } = await params;
+
+  // POST applies checkActive; PATCH did not, so a suspended user holding a
+  // live access token could still cancel an accepted agreement or file a
+  // no-show against their counterparty.
+  const patchUser = await prisma.user.findUnique({
+    where: { id: user.userId },
+    select: { email: true, suspendedUntil: true },
+  });
+  if (!patchUser) return err("User not found", 404);
+  const patchActiveErr = checkActive(patchUser);
+  if (patchActiveErr) return err(patchActiveErr, 403);
+
   const body = await parseBody(req, BODY_4KB);
   if (body instanceof NextResponse) return body;
   const { action, note, agreementId } = body as { action: string; note?: string; agreementId?: string };

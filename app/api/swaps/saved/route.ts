@@ -1,12 +1,12 @@
 import { NextRequest } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { ok, err } from "@/lib/apiResponse";
+import { ok } from "@/lib/apiResponse";
 import { calcScore } from "@/lib/reputation";
 
 export async function GET(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   // Hide swaps from operators the current user has blocked, or who blocked them.
   // Symmetric, same as the browse list filter.
@@ -24,12 +24,21 @@ export async function GET(req: NextRequest) {
     hiddenUserIds.add(b.blockerId === user.userId ? b.blockedId : b.blockerId);
   }
 
+  // Depot-scope the list as well as the save. Rows saved before the caller
+  // changed depot — or saved through the gap this route used to have — must not
+  // keep returning another depot's swaps and their contact details.
+  const caller = await prisma.user.findUnique({
+    where: { id: user.userId },
+    select: { depotId: true },
+  });
+
   const saved = await prisma.savedSwap.findMany({
     where: {
       userId: user.userId,
       // Hide archived swaps (retired from the board) and blocked-user swaps.
       swap: {
         archivedAt: null,
+        depotId: caller?.depotId ?? "__no_depot__",
         ...(hiddenUserIds.size > 0 ? { userId: { notIn: [...hiddenUserIds] } } : {}),
       },
     },

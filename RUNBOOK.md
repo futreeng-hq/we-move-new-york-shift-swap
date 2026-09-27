@@ -139,7 +139,7 @@ Cron schedules are in `vercel.json`. All require the `CRON_SECRET` env var as a 
 |---|---|---|
 | `/api/cron/expire-swaps` | Daily | Mark past-date swaps as expired |
 | `/api/cron/expiring-soon` | Daily | Notify operators of swaps expiring tomorrow (NYC time) |
-| `/api/cron/cleanup-swaps` | Weekly | Two-phase retention: archive settled swaps, hard-delete long-dead ones (see Data Retention) |
+| `/api/cron/cleanup-swaps` | Daily (`0 8 * * *`) | Two-phase retention: archive settled swaps, hard-delete long-dead ones (see Data Retention) |
 | `/api/cron/expire-announcements` | Daily | Delete expired depot announcements |
 | `/api/cron/daily-digest` | Daily morning | Send new-swaps digest to subscribers |
 | `/api/cron/agreement-followups` | Daily | Proposal expiry, post-shift prompts, non-response finalize |
@@ -169,7 +169,7 @@ Silence is the alarm.
    | `expire-swaps` | `0 5 * * *` (daily) | 1 day / 6h |
    | `expiring-soon` | `15 13 * * *` (daily) | 1 day / 6h |
    | `daily-digest` | `0 12 * * *` (daily) | 1 day / 6h |
-   | `cleanup-swaps` | `0 8 * * *` (weekly effect) | 1 day / 12h |
+   | `cleanup-swaps` | `0 8 * * *` (daily) | 1 day / 12h |
    | `expire-announcements` | `0 9 * * *` (daily) | 1 day / 6h |
    | `agreement-followups` | `0 13 * * *` (daily) | 1 day / 6h |
 
@@ -189,7 +189,7 @@ paths (auth 401, caught 500) never ping.
 
 ## Data Retention
 
-Swaps are retired in two phases by the weekly `cleanup-swaps` cron. The old
+Swaps are retired in two phases by the daily `cleanup-swaps` cron. The old
 behavior hard-deleted swaps 7 days after they filled/expired, which cascaded
 away their messages, **agreements (the printable dispatcher proof)**, and
 reports. The two-phase policy keeps that evidence reachable.

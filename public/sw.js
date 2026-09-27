@@ -1,7 +1,19 @@
 // WMNY Shift Swap — Service Worker
 // Handles push notifications and offline app shell caching
 
-const CACHE_NAME = "wmny-shell-v1";
+// BUMP THIS ON EVERY DEPLOY THAT CHANGES THE SHELL.
+//
+// `activate` only deletes caches whose name differs from CACHE_NAME, so while
+// this string stays the same the old cache is kept forever. Navigations are
+// written into it (see the fetch handler), so a returning or offline user is
+// served shell HTML that references /_next/static/ hashes the new deploy no
+// longer has — a blank page — and the cache grows without bound.
+//
+// This is a manual step on purpose: public/sw.js is served as a static file and
+// nothing rewrites it at build time. Wiring it to VERCEL_GIT_COMMIT_SHA needs a
+// generated service worker; until that exists, bumping the number here is the
+// mechanism, and it belongs on the deploy checklist in RUNBOOK.md.
+const CACHE_NAME = "wmny-shell-v2";
 
 // App shell: routes and static assets that must load offline
 const SHELL_URLS = [

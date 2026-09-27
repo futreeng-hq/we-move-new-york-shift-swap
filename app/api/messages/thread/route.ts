@@ -1,11 +1,12 @@
 import { NextRequest } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
+import { isBlockedBetween } from "@/lib/accessScope";
 
 export async function GET(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const url = new URL(req.url);
   const withUserId = url.searchParams.get("with");
@@ -51,11 +52,19 @@ export async function GET(req: NextRequest) {
 // the other's record without consent and erase evidence of harassment.
 export async function DELETE(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const url = new URL(req.url);
   const withUserId = url.searchParams.get("with");
   if (!withUserId) return err("'with' query param required", 400);
+
+  // Every sibling path (thread GET, thread read, message read, message DELETE)
+  // returns a neutral 404 when a block exists in either direction. This one
+  // did not, and its `{ deleted: n }` count disclosed whether a conversation
+  // with that user existed at all.
+  if (await isBlockedBetween(user.userId, withUserId)) {
+    return err("Conversation not found", 404);
+  }
 
   const result = await prisma.message.deleteMany({
     where: {

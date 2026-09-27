@@ -34,7 +34,7 @@ export default function PrivacyPage() {
 
         <div style={s.section}>
           <h2 style={s.h2}>1. Overview</h2>
-          <p style={s.p}>We Move New York ("WMNY," "we," "us") is committed to protecting your privacy. This Privacy Policy explains what information we collect, how we use it, and your rights regarding your data. WMNY is not affiliated with, endorsed by, or operated by TWU Local 100, the MTA, NYCT, or any labor union. By using the App, you agree to the practices described in this policy.</p>
+          <p style={s.p}>We Move New York (&ldquo;WMNY,&rdquo; &ldquo;we,&rdquo; &ldquo;us&rdquo;) is committed to protecting your privacy. This Privacy Policy explains what information we collect, how we use it, and your rights regarding your data. WMNY is not affiliated with, endorsed by, or operated by TWU Local 100, the MTA, NYCT, or any labor union. By using the App, you agree to the practices described in this policy.</p>
         </div>
 
         <hr style={s.divider} />
@@ -45,7 +45,7 @@ export default function PrivacyPage() {
           <p style={s.p}><strong style={{ color: C.white }}>Swap Listings:</strong> Content you post — including shift details, run numbers, routes, and dates — is visible to other verified users at your depot.</p>
           <p style={s.p}><strong style={{ color: C.white }}>Messages:</strong> Messages sent through the platform are stored to facilitate swap coordination. Messages are only visible to the sender and recipient.</p>
           <p style={s.p}><strong style={{ color: C.white }}>Reputation & Reviews:</strong> Ratings and completion history are stored and displayed to other users to build trust in the platform.</p>
-          <p style={s.p}><strong style={{ color: C.white }}>Usage Data:</strong> We use Google Analytics and Google Tag Manager to collect basic usage data such as pages visited and features used to improve the App. We use Sentry to monitor errors and performance; client replay data is configured to mask inputs and text. We use Resend to deliver transactional email. These providers process data under their own privacy policies. We do not sell this data, and we do not use it to identify individual users or share it with your employer.</p>
+          <p style={s.p}><strong style={{ color: C.white }}>Usage Data:</strong> We use Google Analytics and Google Tag Manager, and Vercel Analytics and Vercel Speed Insights, to collect basic usage data such as pages visited, features used, and page performance, to improve the App. In Google Analytics, page views are associated with your account identifier along with your role, depot, and language so we can understand how each depot uses the App; we do not attach your name or email. We use Sentry to monitor errors and performance; client replay data is configured to mask inputs and text, and password-reset and email-verification links are redacted before any analytics or error report is sent. We use Resend to deliver transactional email. These providers process data under their own privacy policies. We do not sell this data, and we do not share it with your employer.</p>
         </div>
 
         <hr style={s.divider} />

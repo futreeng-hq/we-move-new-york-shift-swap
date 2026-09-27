@@ -42,7 +42,12 @@ export async function GET(
     // The verify token is now cleared, so this branch can never fire twice
     // for the same user. Non-fatal: a failed send doesn't roll back verification,
     // it just gets reported to Sentry so we know if Resend is degraded.
-    const appUrl = getAppUrl() || "https://wmnyshiftswap.com";
+    // No production fallback: hardcoding it meant a preview or staging deploy
+    // whose NEXT_PUBLIC_APP_URL was missing silently redirected users into
+    // PRODUCTION mid-verification, so the token was consumed against the wrong
+    // environment. Better to fail visibly than to cross environments.
+    const appUrl = getAppUrl();
+    if (!appUrl) return err("Server configuration error — contact support", 500);
     const safeFirstName = escapeHtml(user.firstName);
     const welcomeHtml = `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#010028;color:#fff;border-radius:16px">
   <h1 style="font-size:22px;font-weight:800;margin:0 0 8px">Welcome aboard, ${safeFirstName} 🚌</h1>

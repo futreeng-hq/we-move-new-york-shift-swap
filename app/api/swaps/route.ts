@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, checkActive } from "@/lib/auth";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, rateLimitByIp, clientIp } from "@/lib/rateLimit";
 import { ok, err } from "@/lib/apiResponse";
@@ -13,7 +13,7 @@ import { getPrefsMany } from "@/lib/notificationPrefs";
 
 export async function GET(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.userId } });
   if (!dbUser?.depotId) return err("Set your depot first", 400);
@@ -128,7 +128,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const ip = clientIp(req);
   if (!await rateLimitByIp(ip, "post:ip", 30, 3_600_000)) return err("Rate limit exceeded — too many posts from this network", 429);

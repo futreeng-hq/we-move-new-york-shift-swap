@@ -22,6 +22,15 @@ function decodeJwtPayload(token: string): { userId?: string; iat?: number } | nu
 }
 
 export async function middleware(req: NextRequest) {
+  // Defence in depth against the middleware-bypass class of Next.js bug
+  // (CVE-2025-29927 and anything like it): a client that can set this internal
+  // header convinces the framework a request has already passed middleware.
+  // 16.3.5 is patched, but an inbound request should never carry it, so refuse
+  // outright rather than relying on the framework staying patched.
+  if (req.headers.has("x-middleware-subrequest")) {
+    return NextResponse.json({ error: "Bad request" }, { status: 400 });
+  }
+
   if (process.env.MAINTENANCE_MODE === "true") {
     const { pathname } = req.nextUrl;
     if (
@@ -36,23 +45,31 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(new URL("/maintenance", req.url));
   }
 
-  // For API routes (except auth/refresh and health), enforce force-logout.
-  // Access tokens are short-lived (15 min) but logout-all should take effect immediately.
+  // Force-logout enforcement for PAGE routes only.
+  //
+  // API routes are handled by requireUser() in lib/auth.ts, which is the
+  // authoritative layer: it sits against the data, it cannot be skipped by a
+  // middleware bypass, and it covers authenticated work this matcher does not
+  // reach. Doing it in both places would mean two Redis round-trips on every
+  // API request for no extra safety, so this branch deliberately excludes
+  // /api/ — see lib/auth.ts requireUser for the reasoning.
+  //
+  // Page routes have no requireUser, so the check still belongs here for them:
+  // it is what stops a revoked session from rendering an authenticated page
+  // shell (app/s/[id]/page.tsx reads the access token directly, for one).
   const { pathname } = req.nextUrl;
-  if (
-    pathname.startsWith("/api/") &&
-    pathname !== "/api/health" &&
-    pathname !== "/api/auth/refresh" &&
-    !pathname.startsWith("/api/auth/login") &&
-    !pathname.startsWith("/api/auth/register") &&
-    !pathname.startsWith("/api/auth/forgot-password") &&
-    !pathname.startsWith("/api/auth/reset-password") &&
-    !pathname.startsWith("/api/cron/")
-  ) {
-    const token = req.cookies.get("accessToken")?.value
-      ?? (req.headers.get("authorization")?.startsWith("Bearer ")
-        ? req.headers.get("authorization")!.slice(7)
-        : null);
+  if (!pathname.startsWith("/api/")) {
+    // MUST match lib/auth.ts getTokenFromRequest exactly, including the
+    // truthiness fallback. `??` would NOT fall through on an empty cookie
+    // value, so a request carrying `Cookie: accessToken=` plus a Bearer
+    // header would pick "" here, skip the force-logout check below, and
+    // still authenticate in the route via getTokenFromRequest — defeating
+    // logout-all, password reset, suspension and role demotion for the
+    // token's full 15-minute life.
+    const cookieToken = req.cookies.get("accessToken")?.value;
+    const authHeader = req.headers.get("authorization");
+    const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    const token = cookieToken || bearerToken;
     if (token) {
       const payload = decodeJwtPayload(token);
       if (payload?.userId && payload?.iat) {

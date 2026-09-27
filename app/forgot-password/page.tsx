@@ -46,7 +46,7 @@ export default function ForgotPasswordPage() {
         ) : (
           <div style={{ display: "grid", gap: 16 }}>
             <p style={{ fontSize: 14, color: C.m, margin: 0, lineHeight: 1.6 }}>
-              Enter your account email and we'll send you a link to reset your password.
+              Enter your account email and we&rsquo;ll send you a link to reset your password.
             </p>
 
             {error && (

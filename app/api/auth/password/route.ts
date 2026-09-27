@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import * as Sentry from "@sentry/nextjs";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { rateLimit } from "@/lib/rateLimit";
@@ -10,7 +10,7 @@ import { blockUserAccessTokens } from "@/lib/tokenBlocklist";
 
 export async function PUT(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   if (!await rateLimit(`change-password:${user.userId}`, 5, 15 * 60 * 1000)) {
     Sentry.captureEvent({ message: "Change-password rate limit hit", level: "warning", extra: { userId: user.userId } });
@@ -42,8 +42,16 @@ export async function PUT(req: NextRequest) {
 
   // Invalidate all existing sessions on password change. The current session
   // will need to refresh, but that's a small price for the security guarantee
-  // that no stolen tokens survive a password change.
-  await blockUserAccessTokens(user.userId);
+  // that no stolen tokens survive a password change. Refresh tokens are not
+  // bound to the password hash, so if this marker cannot be written the
+  // guarantee does not hold and we must not claim success.
+  const revoked = await blockUserAccessTokens(user.userId);
+  if (!revoked) {
+    return err(
+      "Your password was changed, but we could not sign out your other devices. Please try signing out everywhere again in a moment.",
+      503,
+    );
+  }
 
   return ok({ message: "Password updated" });
 }

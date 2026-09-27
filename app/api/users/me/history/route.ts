@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { ok, err } from "@/lib/apiResponse";
+import { ok } from "@/lib/apiResponse";
 
 // Returns all swaps the user is involved in (any status, sorted newest first):
 //   - swaps the user posted (the user is the swap's userId)
@@ -14,7 +14,7 @@ import { ok, err } from "@/lib/apiResponse";
 // other (the swap's poster never proposes their own agreement).
 export async function GET(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   // 1. Swaps posted by the user
   const postedSwaps = await prisma.swap.findMany({

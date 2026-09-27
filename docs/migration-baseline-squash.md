@@ -28,7 +28,61 @@ P3018 records the migration as **failed** in `_prisma_migrations`, which then bl
 
 ## Why this is needed
 
-Prisma orders migrations by the numeric prefix of the directory name. Actual apply order today:
+> **The "Correction (2026-09-25)" that stood here was itself wrong, and is
+> retracted (2026-09-26). The original diagnosis below this line is correct and
+> this runbook should be executed.**
+>
+> That correction claimed Prisma sorts migration directories lexicographically,
+> where `'2'` (0x32) precedes `'_'` (0x5F), so `20260401214939_init` sorts first
+> and the 8-digit directories do not jump ahead of it. It asserted this as
+> "rehearsed" without ever running `migrate deploy` against an empty database —
+> the check it claimed to have done was a shell `sort`, which is not Prisma's
+> ordering.
+>
+> Prisma orders by the numeric timestamp prefix, exactly as originally
+> documented. CI proved it on the first `pull_request` run of PR #46:
+> `20260401_add_agreements_push_roles` failed with
+> `42P01 relation "users" does not exist`. Reproduced directly against an empty
+> Postgres 16 on 2026-09-26 — numeric-prefix order fails on that migration;
+> `init`-first order applies all 16 cleanly.
+>
+> The `DROP TYPE IF EXISTS` fix from that pass is still correct and still
+> needed. It was a second, real bug sitting behind this one — not a replacement
+> for it.
+>
+> Everything below is the original, rehearsed guidance. Follow it.
+>
+> ~~Prisma sorts migration directories **lexicographically**, not by parsed
+> numeric prefix, and `'2'` (0x32) sorts before `'_'` (0x5F) — so
+> `20260401214939_init` sorts **first**, and the 8-digit directories do not jump
+> ahead of it.~~
+>
+> The actual from-scratch failure was
+> `20260704_drop_unused_audit_action/migration.sql`, which ran a bare
+> `DROP TYPE "AuditAction"` on a type **no migration in this repo ever creates**
+> — it exists in production only as pre-migration drift. On an empty database
+> that statement errored, Prisma recorded the migration as failed, and P3009 then
+> blocked every later migration, including `20260704_trust_v2` — which is what
+> adds `accepted_at`, `user_a_happened`, `shift_date`, the `'accepted'` enum
+> value, and **both partial unique indexes** the agreement conflict handling
+> depends on. So a fresh environment did not merely lack a 409; its agreement
+> flow did not work at all.
+>
+> Fixed by changing that one statement to `DROP TYPE IF EXISTS`.
+>
+> ~~**Rehearsed 2026-09-25: this squash is no longer needed.**~~ **Retracted
+> 2026-09-26. The squash IS still needed and this runbook is live.** The claim
+> that all 16 migrations apply cleanly in order was produced by a shell `sort`,
+> not by `migrate deploy`, and is false under Prisma's ordering. CI has been
+> reverted to `db push` + `partial-indexes.sql` until this runbook is executed.
+>
+> Note for step 6: `db push` cannot express a partial unique index, so while CI
+> is on `db push` its constraints are not identical to production's. That is a
+> real cost and it is why finishing this runbook matters — but it is a weaker
+> guarantee, not a broken one, because `partial-indexes.sql` adds the two
+> indexes explicitly and CI asserts both exist.
+
+~~Prisma orders migrations by the numeric prefix of the directory name. Actual apply order today:~~
 
 ```
 20260401_add_agreements_push_roles     ← 20260401        applied FIRST
@@ -37,7 +91,7 @@ Prisma orders migrations by the numeric prefix of the directory name. Actual app
 20260401214939_init                    ← 20260401214939  applied LAST
 ```
 
-The real baseline sorts **last**, so the first migration applied `ALTER`s a `users` table that does not exist:
+~~The real baseline sorts **last**, so the first migration applied `ALTER`s a `users` table that does not exist:~~
 
 ```
 $ npx prisma migrate deploy          # against any empty database
@@ -47,7 +101,7 @@ ERROR: relation "users" does not exist
 
 Production and preview are unaffected — they were built incrementally, one migration at a time. The defect only appears on a from-scratch build, which is why nothing has caught it: CI works around it with `db push`, and Neon branches inherit their parent's schema.
 
-Consequences today: no new environment can be stood up from this repo, disaster recovery has no tested path, and CI cannot exercise the same migration path production uses.
+Consequences before the fix: no new environment could be stood up from this repo, disaster recovery had no tested path, and CI could not exercise the same migration path production uses.
 
 ---
 

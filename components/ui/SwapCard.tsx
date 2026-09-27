@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Swap, User } from "@/types";
 import { C, CM, STC, SWAP_TYPES } from "@/constants/colors";
 import { useAuth } from "@/lib/AuthContext";
@@ -10,6 +10,7 @@ import RepBadge from "./RepBadge";
 import VerifiedBadge from "./VerifiedBadge";
 import { playClick, playPop } from "@/lib/sound";
 import { analytics } from "@/lib/analytics";
+import { formatSwapDate, parseSwapDate } from "@/lib/swapDate";
 
 const ft = (t?: string | null) => {
   if (!t) return "";
@@ -60,11 +61,25 @@ export default function SwapCard({ swap: s, user, onDelete, onStatusChange, onEd
   const activeLabel = activeAgo(s.posterLastActive);
   const st2 = STC[s.status] ?? STC.open;
   const isNew = lastVisit && new Date(s.createdAt).getTime() > lastVisit - 3600000;
-  const isRecentlyNew = Date.now() - new Date(s.createdAt).getTime() < 2 * 60 * 60 * 1000;
+
+  // The clock is read after mount, not during render. Calling Date.now() in the
+  // render body made the server and client disagree whenever a card crossed the
+  // "recently new" or "urgent" threshold between the two — a real hydration
+  // mismatch on decorative badges, and what react-hooks/purity was flagging.
+  // Until `now` is set, the time-dependent badges simply do not render, which
+  // matches what the server produced.
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate: reading the clock on mount is the fix for the hydration mismatch above, not a cascading render
+    setNow(Date.now());
+  }, []);
+
+  const isRecentlyNew = now !== null && now - new Date(s.createdAt).getTime() < 2 * 60 * 60 * 1000;
 
   const urgentMs = 48 * 60 * 60 * 1000;
   const swapDate = s.date || s.fromDate;
-  const msToSwap = swapDate ? new Date(swapDate + "T12:00").getTime() - Date.now() : null;
+  const swapDateParsed = parseSwapDate(swapDate);
+  const msToSwap = swapDateParsed && now !== null ? swapDateParsed.getTime() - now : null;
   const isUrgent = msToSwap !== null && s.status === "open" && msToSwap < urgentMs && msToSwap > 0;
   const [tapped, setTapped] = useState(false);
   const tappedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -180,13 +195,13 @@ export default function SwapCard({ swap: s, user, onDelete, onStatusChange, onEd
             <div style={{ padding: "6px 10px", borderRadius: 8, background: C.gs }}>
               <div style={{ fontSize: 8, color: C.gold, textTransform: "uppercase" }}>{tr("detail.swappingFrom")}</div>
               <div style={{ fontSize: 12, fontWeight: 700, color: C.white }}>{s.fromDay}</div>
-              {s.fromDate && <div style={{ fontSize: 10, color: C.m, marginTop: 2 }}>{new Date(s.fromDate + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}</div>}
+              {s.fromDate && <div style={{ fontSize: 10, color: C.m, marginTop: 2 }}>{formatSwapDate(s.fromDate)}</div>}
             </div>
             <Icon n="swap" s={14} c={C.m} />
             <div style={{ padding: "6px 10px", borderRadius: 8, background: C.blue + "12" }}>
               <div style={{ fontSize: 8, color: C.blue, textTransform: "uppercase" }}>{tr("detail.swappingTo")}</div>
               <div style={{ fontSize: 12, fontWeight: 700, color: C.white }}>{s.toDay}</div>
-              {s.toDate && <div style={{ fontSize: 10, color: C.m, marginTop: 2 }}>{new Date(s.toDate + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}</div>}
+              {s.toDate && <div style={{ fontSize: 10, color: C.m, marginTop: 2 }}>{formatSwapDate(s.toDate)}</div>}
             </div>
           </div>
         </div>

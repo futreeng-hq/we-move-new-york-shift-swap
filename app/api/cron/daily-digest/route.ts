@@ -1,11 +1,13 @@
 import { NextRequest } from "next/server";
+import * as Sentry from "@sentry/nextjs";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { notifyMany } from "@/lib/notifyUser";
 import { getPrefsMany } from "@/lib/notificationPrefs";
 import { pingHeartbeat } from "@/lib/heartbeat";
+import { claimDailyRun } from "@/lib/cronOnce";
 
-// Runs every morning at 7 AM ET — sends each subscribed operator a summary of
+// Runs every morning at 12:00 UTC = 8 AM EDT / 7 AM EST — sends each subscribed operator a summary of
 // new open swaps posted in their depot in the last 24 hours.
 //
 // A7: routed through notifyMany with category "digest" (in-app records +
@@ -14,10 +16,22 @@ import { pingHeartbeat } from "@/lib/heartbeat";
 // `digest` pref is off, and users whose `new_post` mode is "off" (they opted
 // out of new-post noise entirely). Modes digest/all/matches all still get the
 // digest — it's the summary layer.
+// Cron work is unbounded in row count. Without an explicit ceiling the
+// function is killed at the platform default mid-loop: partial work, no
+// heartbeat ping, and no error recorded anywhere.
+export const maxDuration = 300;
+
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   const auth = req.headers.get("authorization");
   if (!secret || auth !== `Bearer ${secret}`) return err("Unauthorized", 401);
+
+  // Vercel cron delivery is at-least-once, and this handler sends
+  // notifications — a retry would notify every recipient twice.
+  if (!await claimDailyRun("daily-digest")) {
+    await pingHeartbeat("daily-digest");
+    return ok({ skipped: "already ran today" });
+  }
 
   try {
     const since = new Date(Date.now() - 86_400_000);
@@ -74,6 +88,11 @@ export async function GET(req: NextRequest) {
     await pingHeartbeat("daily-digest");
     return ok({ sent, excluded });
   } catch (e) {
+    // Every handler swallowed its error into a 500, so nothing ever threw,
+    // onRequestError never fired, and no Sentry event was created. The only
+    // signal was heartbeat silence — and HEARTBEAT_URL_BASE is commented out
+    // in .env.example, so a cron failing daily was invisible.
+    Sentry.captureException(e, { tags: { cron: "daily-digest" } });
     return err(`Cron failed: ${e instanceof Error ? e.message : "unknown error"}`, 500);
   }
 }

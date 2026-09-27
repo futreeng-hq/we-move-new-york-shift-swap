@@ -2,6 +2,8 @@
 // Analytics wrapper — Google Analytics 4
 // All calls are no-ops if window/gtag is not available.
 
+import { redactSensitivePath } from "@/lib/sensitiveUrl";
+
 const GA_ID = "G-RJV2G8G06H";
 
 declare global {
@@ -42,7 +44,12 @@ export function track(event: string, props?: Record<string, unknown>) {
 
 // Typed event helpers
 export const analytics = {
-  pageView: (path: string) => gtag("event", "page_view", { page_path: path, send_to: GA_ID }),
+  // page_path is redacted because /reset-password/<jwt> and
+  // /verify-email/<token> carry a live credential in the path. layout.tsx sets
+  // send_page_view:false so this is the only page_view GA receives — if that is
+  // ever re-enabled, gtag's automatic page_location will leak the raw token again.
+  pageView: (path: string) =>
+    gtag("event", "page_view", { page_path: redactSensitivePath(path), send_to: GA_ID }),
 
   // Auth
   signupStarted: () => track("signup_started"),

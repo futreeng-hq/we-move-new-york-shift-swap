@@ -1,21 +1,42 @@
 import { NextRequest } from "next/server";
+import * as Sentry from "@sentry/nextjs";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { notifyMany, notifyUser } from "@/lib/notifyUser";
+import { nyToday } from "@/lib/nyDate";
 import { pingHeartbeat } from "@/lib/heartbeat";
+import { claimDailyRun } from "@/lib/cronOnce";
 
 // Runs daily — notifies owners and interested users about swaps expiring tomorrow
+// Cron work is unbounded in row count. Without an explicit ceiling the
+// function is killed at the platform default mid-loop: partial work, no
+// heartbeat ping, and no error recorded anywhere.
+export const maxDuration = 300;
+
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   const auth = req.headers.get("authorization");
   if (!secret || auth !== `Bearer ${secret}`) return err("Unauthorized", 401);
 
+  // Vercel cron delivery is at-least-once, and this handler sends
+  // notifications — a retry would notify every recipient twice.
+  if (!await claimDailyRun("expiring-soon")) {
+    await pingHeartbeat("expiring-soon");
+    return ok({ skipped: "already ran today" });
+  }
+
   try {
-  // Compute "tomorrow" in NYC time (America/New_York) so the window
-  // aligns with operators' actual calendar day, not the UTC server clock.
-  const nycNow = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
-  const tomorrow = new Date(Date.UTC(nycNow.getFullYear(), nycNow.getMonth(), nycNow.getDate() + 1));
-  const dayAfter  = new Date(Date.UTC(nycNow.getFullYear(), nycNow.getMonth(), nycNow.getDate() + 2));
+  // Compute "tomorrow" in NYC time (America/New_York) so the window aligns with
+  // operators' actual calendar day, not the UTC server clock.
+  //
+  // This was the only date logic in the app bypassing lib/nyDate, and it did so
+  // by re-parsing toLocaleString("en-US") output — a format ECMA-262 leaves
+  // implementation-defined, so it is correct on this runtime by luck rather
+  // than by contract. nyToday() uses Intl parts directly and is covered by
+  // test/nyDate.test.ts across EST, EDT and both DST transitions.
+  const today = nyToday();
+  const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+  const dayAfter = new Date(today.getTime() + 48 * 60 * 60 * 1000);
 
   const swaps = await prisma.swap.findMany({
     where: { status: "open", date: { gte: tomorrow, lt: dayAfter } },
@@ -29,7 +50,10 @@ export async function GET(req: NextRequest) {
     const snippet = swap.details.substring(0, 60);
 
     // Notify swap owner
-    notifyUser(swap.userId, {
+    // Must be awaited: the serverless instance is frozen the moment the
+    // response is returned, so a floating promise here is silently dropped
+    // and the cron still reports 200 + pings the heartbeat.
+    await notifyUser(swap.userId, {
       category: "swap_updates",
       title: "Your swap expires tomorrow",
       body: `"${snippet}" — fill it or repost before it expires`,
@@ -44,7 +68,7 @@ export async function GET(req: NextRequest) {
     });
     const ids = interested.map(m => m.fromUserId);
     if (ids.length > 0) {
-      notifyMany(ids, {
+      await notifyMany(ids, {
         category: "swap_updates",
       title: "Swap expiring tomorrow",
         body: `"${snippet}" — reach out now before it's gone`,
@@ -57,6 +81,11 @@ export async function GET(req: NextRequest) {
   await pingHeartbeat("expiring-soon");
     return ok({ notified });
   } catch (e) {
+    // Every handler swallowed its error into a 500, so nothing ever threw,
+    // onRequestError never fired, and no Sentry event was created. The only
+    // signal was heartbeat silence — and HEARTBEAT_URL_BASE is commented out
+    // in .env.example, so a cron failing daily was invisible.
+    Sentry.captureException(e, { tags: { cron: "expiring-soon" } });
     return err(`Cron failed: ${e instanceof Error ? e.message : "unknown error"}`, 500);
   }
 }

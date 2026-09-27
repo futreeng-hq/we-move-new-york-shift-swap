@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, checkActive } from "@/lib/auth";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rateLimit";
 import { ok, err } from "@/lib/apiResponse";
@@ -7,13 +7,14 @@ import { notifyUserWithEmailFallback } from "@/lib/notifyUser";
 import { parseBody, BODY_4KB } from "@/lib/parseBody";
 import { escapeHtml } from "@/lib/escapeHtml";
 import { getAppUrl } from "@/lib/appUrl";
+import { checkSwapAccess } from "@/lib/accessScope";
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
   const { id } = await params;
 
   if (!await rateLimit(`msg:${user.userId}`, 5, 60_000)) {
@@ -36,16 +37,12 @@ export async function POST(
   if (swap.userId === user.userId) return err("Cannot message yourself", 400);
   if (swap.status !== "open") return err("Swap is not open", 400);
 
-  const block = await prisma.block.findFirst({
-    where: {
-      OR: [
-        { blockerId: user.userId, blockedId: swap.userId },
-        { blockerId: swap.userId, blockedId: user.userId },
-      ],
-    },
-    select: { id: true },
-  });
-  if (block) return err("Unable to send message", 403);
+  // Depot scoping was missing here while the direct-message route enforces it
+  // explicitly "to prevent cross-depot harassment" — so this was the way
+  // around that control. checkSwapAccess covers the depot and the block in one
+  // neutral 404.
+  const denied = await checkSwapAccess(user.userId, swap);
+  if (denied) return err(denied.message, denied.status);
 
   const [message, sender, depot] = await Promise.all([
     prisma.message.create({

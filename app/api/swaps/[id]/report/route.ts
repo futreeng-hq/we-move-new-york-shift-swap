@@ -1,19 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { requireUser } from "@/lib/auth";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, rateLimitByIp, clientIp } from "@/lib/rateLimit";
 import { ok, err } from "@/lib/apiResponse";
 import { parseBody, BODY_2KB } from "@/lib/parseBody";
 import { sendEmail } from "@/lib/email";
 import { escapeHtml } from "@/lib/escapeHtml";
+import { getAppUrl } from "@/lib/appUrl";
+import { checkSwapAccess } from "@/lib/accessScope";
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   // Rate limit reports — prevent flooding the admin queue with bogus reports.
   // Per-IP cap protects against many compromised accounts on the same network.
@@ -27,8 +29,23 @@ export async function POST(
   const { reason } = body as { reason?: string };
   if (reason && reason.length > 500) return err("Reason must be 500 characters or fewer", 400);
 
+  const reporter = await prisma.user.findUnique({
+    where: { id: user.userId },
+    select: { email: true, suspendedUntil: true },
+  });
+  if (!reporter) return err("User not found", 404);
+  const activeErr = checkActive(reporter);
+  if (activeErr) return err(activeErr, 403);
+
   const swap = await prisma.swap.findUnique({ where: { id } });
   if (!swap) return err("Swap not found", 404);
+
+  // Reporting fired an email containing the swap's details to the abuse
+  // mailbox with no depot or block check, so a blocked user could keep
+  // generating reports against the person who blocked them, and any user could
+  // report swaps in depots they cannot see.
+  const denied = await checkSwapAccess(user.userId, swap);
+  if (denied) return err(denied.message, denied.status);
 
   const existing = await prisma.report.findFirst({
     where: { swapId: id, reporterId: user.userId },
@@ -54,7 +71,9 @@ export async function POST(
     const reasonText = reason?.trim() ? reason.trim() : "(no reason given)";
     const detailsSnippet = swap.details.slice(0, 200);
     const reportedAt = new Date().toUTCString();
-    const reportsUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/admin?tab=reports`;
+    // getAppUrl() falls back to VERCEL_URL on preview; reading the env var
+    // directly with ?? "" produced a relative, dead link there.
+    const reportsUrl = `${getAppUrl() ?? ""}/admin?tab=reports`;
 
     const subject = `New report on We Move NY (swap ${id})`;
     const html = `

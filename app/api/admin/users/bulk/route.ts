@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import * as Sentry from "@sentry/nextjs";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { writeAuditLog } from "@/lib/audit";
@@ -10,7 +11,7 @@ import { blockUserAccessTokens } from "@/lib/tokenBlocklist";
 // Atomically update role or suspendedUntil for up to 50 users at once.
 export async function POST(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const dbUser = await prisma.user.findUnique({ where: { id: user.userId } });
   if (!dbUser || dbUser.role !== "admin") return err("Forbidden", 403);
@@ -59,8 +60,19 @@ export async function POST(req: NextRequest) {
   // keep elevated access until their token expires.
   const wasSuspended = suspendedUntil !== undefined && suspendedUntil !== null && new Date(suspendedUntil) > new Date();
   const wasRoleChanged = role !== undefined;
+  let sessionsRevoked = true;
   if (wasSuspended || wasRoleChanged) {
-    await Promise.all(userIds.map(id => blockUserAccessTokens(id)));
+    const results = await Promise.all(userIds.map(id => blockUserAccessTokens(id)));
+    sessionsRevoked = results.every(Boolean);
+    if (!sessionsRevoked) {
+      // Silently dropping this would leave suspended or demoted users holding
+      // valid access tokens with nothing recording that revocation failed.
+      Sentry.captureMessage("blockUserAccessTokens failed during bulk suspension/role change", {
+        level: "error",
+        tags: { route: "admin/users/bulk PATCH" },
+        extra: { failed: userIds.filter((_, i) => !results[i]).length, total: userIds.length },
+      });
+    }
   }
 
   // Invalidate unused invite codes from suspended users so the spam chain
@@ -86,5 +98,5 @@ export async function POST(req: NextRequest) {
     ip,
   });
 
-  return ok({ updated: userIds.length });
+  return ok({ updated: userIds.length, sessionsRevoked });
 }

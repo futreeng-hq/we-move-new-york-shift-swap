@@ -10,6 +10,7 @@ import Icon from "@/components/ui/Icon";
 import BottomNav from "@/components/ui/BottomNav";
 import NotifIcon from "@/components/ui/NotifIcon";
 import InboxIcon from "@/components/ui/InboxIcon";
+import { parseSwapDate } from "@/lib/swapDate";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -99,7 +100,7 @@ export default function HistoryPage() {
 
   const swapsByDay = new Map<number, HistorySwap[]>();
   for (const s of filtered) {
-    const d = s.date ? new Date(s.date + "T12:00") : null;
+    const d = parseSwapDate(s.date);
     if (d && d.getMonth() === thisMonth && d.getFullYear() === thisYear) {
       const day = d.getDate();
       if (!swapsByDay.has(day)) swapsByDay.set(day, []);

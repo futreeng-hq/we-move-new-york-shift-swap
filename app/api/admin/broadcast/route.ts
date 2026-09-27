@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/apiResponse";
 import { notifyUser, notifyMany } from "@/lib/notifyUser";
@@ -9,7 +9,7 @@ import { parseBody, BODY_4KB } from "@/lib/parseBody";
 // body: { target: "all" | "user" | "depot", userId?: string, depotCode?: string, text: string }
 export async function POST(req: NextRequest) {
   let token;
-  try { token = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { token = await requireUser(req); } catch (e) { return authError(e); }
 
   const admin = await prisma.user.findUnique({ where: { id: token.userId } });
   if (!admin || !["admin", "subAdmin"].includes(admin.role)) return err("Forbidden", 403);

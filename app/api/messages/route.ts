@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, checkActive } from "@/lib/auth";
+import { requireUser, checkActive, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rateLimit";
 import { ok, err } from "@/lib/apiResponse";
 import { notifyUserWithEmailFallback } from "@/lib/notifyUser";
 import { parseBody, BODY_4KB } from "@/lib/parseBody";
+import { checkSwapAccess } from "@/lib/accessScope";
 import { escapeHtml } from "@/lib/escapeHtml";
 
 export async function GET(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const unreadCount = await prisma.message.count({
     where: { toUserId: user.userId, read: false },
@@ -20,7 +21,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   if (!await rateLimit(`msg:${user.userId}`, 5, 60_000)) {
     return err("Slow down! Max 5 messages per minute", 429);
@@ -41,16 +42,11 @@ export async function POST(req: NextRequest) {
   if (!swap) return err("Swap not found", 404);
   if (swap.userId === user.userId) return err("Cannot message yourself", 400);
 
-  const block = await prisma.block.findFirst({
-    where: {
-      OR: [
-        { blockerId: user.userId, blockedId: swap.userId },
-        { blockerId: swap.userId, blockedId: user.userId },
-      ],
-    },
-    select: { id: true },
-  });
-  if (block) return err("Unable to send message", 403);
+  // Depot scoping plus the symmetric block check. The direct-message route
+  // enforces the depot explicitly to prevent cross-depot harassment; sending
+  // via a swap id must not be a way around it.
+  const denied = await checkSwapAccess(user.userId, swap);
+  if (denied) return err(denied.message, denied.status);
 
   const [message, sender, depot] = await Promise.all([
     prisma.message.create({
@@ -69,7 +65,12 @@ export async function POST(req: NextRequest) {
     {
       category: "message",
       title: "Someone is interested in your swap",
-      body: `${senderName}: ${text.trim().slice(0, 100)}`,
+      // Deliberately does NOT include the message text. This body is handed
+      // to showNotification() in public/sw.js, so it renders on the lock
+      // screen — 100 characters of a private message plus the sender's full
+      // name were readable on a shared or borrowed phone. The text is one tap
+      // away behind url.
+      body: `${senderName} sent you a message`,
       url: threadUrl,
     },
     `New message from ${safeSenderName}`,

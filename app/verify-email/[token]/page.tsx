@@ -12,6 +12,7 @@ export default function VerifyEmailPage() {
 
   useEffect(() => {
     const token = params.token;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guard for a missing route param before the fetch below; one render, no cascade
     if (!token) { setStatus("error"); setErrorMsg("Missing token."); return; }
 
     fetch(`/api/auth/verify-email/${token}`)

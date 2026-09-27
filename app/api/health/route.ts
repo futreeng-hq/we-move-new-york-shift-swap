@@ -26,7 +26,11 @@ interface Check {
 async function checkDatabase(): Promise<Check> {
   const started = Date.now();
   try {
-    await prisma.$queryRaw`SELECT 1`;
+    // Counting a real table, not `SELECT 1`. A connectable but half-migrated
+    // database — the exact state a failed `migrate deploy` leaves behind —
+    // answers SELECT 1 happily while every route 500s, so the probe reported
+    // healthy through an outage.
+    await prisma.depot.count();
     return { state: "ok", latencyMs: Date.now() - started };
   } catch {
     return { state: "unreachable", latencyMs: Date.now() - started };

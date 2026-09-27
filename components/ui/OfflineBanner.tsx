@@ -7,6 +7,7 @@ export default function OfflineBanner() {
     const off = () => setOffline(false);
     window.addEventListener("offline", on);
     window.addEventListener("online", off);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- navigator.onLine does not exist during SSR, so the initial value can only be read after mount
     setOffline(!navigator.onLine);
     return () => { window.removeEventListener("offline", on); window.removeEventListener("online", off); };
   }, []);

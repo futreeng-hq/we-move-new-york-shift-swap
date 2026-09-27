@@ -6,7 +6,7 @@ import { AuthProvider } from "@/lib/AuthContext";
 import MeshBackground from "@/components/ui/MeshBackground";
 import OfflineBanner from "@/components/ui/OfflineBanner";
 import AnalyticsProvider from "@/components/ui/AnalyticsProvider";
-import { Analytics } from "@vercel/analytics/next";
+import VercelAnalytics from "@/components/ui/VercelAnalytics";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 
 const poppins = Poppins({
@@ -45,7 +45,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           window.dataLayer = window.dataLayer || [];
           function gtag(){dataLayer.push(arguments);}
           gtag('js', new Date());
-          gtag('config', 'G-RJV2G8G06H');
+          // send_page_view:false is deliberate and load-bearing: gtag's
+          // automatic page_view records page_location as the full URL, which on
+          // /reset-password/<jwt> and /verify-email/<token> is a live
+          // account-takeover credential. AnalyticsProvider sends every page_view
+          // instead, through lib/analytics.ts, which redacts those paths.
+          gtag('config', 'G-RJV2G8G06H', { send_page_view: false });
         `}</Script>
         <MeshBackground />
         <header>
@@ -59,7 +64,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </div>
           </AnalyticsProvider>
         </AuthProvider>
-        <Analytics />
+        {/* Same reason as send_page_view above: Vercel Analytics records the
+            pathname, so the reset/verify credential segment is stripped before
+            the beacon is sent. */}
+        <VercelAnalytics />
         <SpeedInsights />
       </body>
     </html>

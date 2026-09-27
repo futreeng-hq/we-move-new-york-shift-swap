@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { C } from "@/constants/colors";
 
 // Static star positions so they don't re-randomize on re-render
@@ -17,7 +17,8 @@ export default function Intro({ onDone }: { onDone: () => void }) {
   const [p, setP] = useState(0);
   const [pc, setPc] = useState(0);
   const [exiting, setExiting] = useState(false);
-  const stableDone = useCallback(onDone, [onDone]);
+  // (was: useCallback(onDone, [onDone]) — an identity wrapper that stabilised
+  // nothing, since its dep is the value itself. onDone is used directly now.)
 
   useEffect(() => {
     const t = [
@@ -25,10 +26,10 @@ export default function Intro({ onDone }: { onDone: () => void }) {
       setTimeout(() => setP(2), 1000),
       setTimeout(() => setP(3), 3000),
       setTimeout(() => { setExiting(true); }, 3400),
-      setTimeout(stableDone, 4100),
+      setTimeout(onDone, 4100),
     ];
     return () => t.forEach(clearTimeout);
-  }, [stableDone]);
+  }, [onDone]);
 
   useEffect(() => {
     if (p >= 2) {
@@ -37,7 +38,7 @@ export default function Intro({ onDone }: { onDone: () => void }) {
     }
   }, [p]);
 
-  const skip = () => { setExiting(true); setTimeout(stableDone, 500); };
+  const skip = () => { setExiting(true); setTimeout(onDone, 500); };
 
   return (
     <div

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, authError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimitByIp, clientIp } from "@/lib/rateLimit";
 import { calcScore } from "@/lib/reputation";
@@ -10,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   let user;
-  try { user = requireUser(req); } catch { return err("Unauthorized", 401); }
+  try { user = await requireUser(req); } catch (e) { return authError(e); }
 
   const ip = clientIp(req);
   if (!await rateLimitByIp(ip, "rep:ip", 60, 60_000)) return err("Rate limit exceeded", 429);

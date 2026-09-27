@@ -9,6 +9,7 @@ import { CURRENT_TERMS_VERSION } from "@/lib/termsVersion";
 import { C } from "@/constants/colors";
 import Intro from "@/components/screens/Intro";
 import MagneticButton from "@/components/ui/MagneticButton";
+import { useIsomorphicLayoutEffect } from "@/lib/useIsomorphicLayoutEffect";
 
 const lb: React.CSSProperties = { display: "block", marginBottom: 8, fontSize: 12, fontWeight: 600, color: C.m, letterSpacing: 2, textTransform: "uppercase" };
 
@@ -32,25 +33,40 @@ export default function LoginPage() {
   const { login, user, loading } = useAuth();
   const router = useRouter();
 
-  const [showIntro, setShowIntro] = useState(() => {
-    if (typeof window === "undefined") return true;
-    return !sessionStorage.getItem("intro-seen");
-  });
-  const [mode, setMode] = useState<"signin" | "register">(() => {
-    if (typeof window === "undefined") return "signin";
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("invite")) return "register";
-    return "signin";
-  });
+  // These two initializers read browser-only state, so the server and the
+  // client's first render disagreed and React threw hydration error #418 on
+  // every returning visit (sessionStorage already has "intro-seen") and on
+  // every invite link (?invite= flips the tab to register). React then discards
+  // the server HTML and re-renders, which is both an error in the console and a
+  // visible flash of the wrong screen.
+  //
+  // The fix is to make the first client render match the server exactly, then
+  // correct it in a layout effect — which runs before the browser paints, so
+  // there is no flash. `useState(() => ...)` cannot do that; it runs during
+  // render, which is the whole problem.
+  const [showIntro, setShowIntro] = useState(true);
+  const [mode, setMode] = useState<"signin" | "register">("signin");
+
   const [em, setEm] = useState(""); const [pw, setPw] = useState("");
   const [fn, setFn] = useState(""); const [ln, setLn] = useState(""); const [pw2, setPw2] = useState("");
-  const [invCode, setInvCode] = useState(() =>
-    typeof window !== "undefined" ? (new URLSearchParams(window.location.search).get("invite") ?? "") : ""
-  );
+  // Same reason: prefilling from the query string during render is a third
+  // hydration mismatch, on the invite path specifically.
+  const [invCode, setInvCode] = useState("");
+
+  useIsomorphicLayoutEffect(() => {
+    try {
+      if (sessionStorage.getItem("intro-seen")) setShowIntro(false);
+    } catch { /* private mode / blocked storage: keep the intro */ }
+    try {
+      const invite = new URLSearchParams(window.location.search).get("invite");
+      if (invite) { setMode("register"); setInvCode(invite); }
+    } catch { /* malformed query string */ }
+  }, []);
   const [showPw, setShowPw] = useState(false); const [showPw2, setShowPw2] = useState(false);
   const [err, setErr] = useState(""); const [fieldErrs, setFieldErrs] = useState<Record<string, string>>({});
   const [shaking, setShaking] = useState(false); const [submitting, setSubmitting] = useState(false);
   const [showConsentFlow, setShowConsentFlow] = useState(false);
+  const [regAck, setRegAck] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
   const [termsChecked, setTermsChecked] = useState(false);
   const [acceptingTerms, setAcceptingTerms] = useState(false);
@@ -92,6 +108,7 @@ export default function LoginPage() {
     if (!pw2) errs.pw2 = "Required";
     else if (pw !== pw2) errs.pw2 = "Passwords don't match";
     if (!invCode.trim()) errs.inv = "Required — ask a fellow operator";
+    if (!regAck) errs.ack = "Please confirm you understand this before creating an account";
     setFieldErrs(errs);
     return Object.keys(errs).length === 0;
   };
@@ -217,9 +234,14 @@ export default function LoginPage() {
           <h1 style={{ fontSize: 26, fontWeight: 800, color: C.white }}>{mode === "signin" ? "Sign In" : "Create Account"}</h1>
         </div>
 
-        <p style={{ fontSize: 11, color: "rgba(255,255,255,.35)", textAlign: "center", marginBottom: 16, lineHeight: 1.5 }}>
-          Not affiliated with, endorsed by, or operated by TWU Local 100, the MTA, NYCT, or any labor union. Unofficial peer-to-peer tool.{" "}
-          <a href="/disclaimer" style={{ color: "rgba(255,255,255,.45)", textDecoration: "underline" }}>Disclaimer</a>
+        {/* Non-affiliation notice. Must stay readable (not fine print) and must
+            appear on the Register tab, not only behind the consent modal —
+            it is a launch requirement, and at 11px/35% opacity on #010028 it
+            was below WCAG contrast. */}
+        <p style={{ fontSize: 13, color: "rgba(255,255,255,.72)", textAlign: "center", marginBottom: 16, lineHeight: 1.6 }}>
+          We Move NY is not affiliated with, endorsed by, or operated by TWU Local 100 or the MTA.{" "}
+          Unofficial peer-to-peer tool, not affiliated with NYCT or any labor union.{" "}
+          <a href="/disclaimer" style={{ color: "rgba(255,255,255,.8)", textDecoration: "underline" }}>Disclaimer</a>
         </p>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, background: C.s, borderRadius: 12, padding: 4, marginBottom: 18 }}>
@@ -336,6 +358,26 @@ export default function LoginPage() {
                 : <div style={{ fontSize: 11, color: C.m, marginTop: 4 }}>Ask a fellow operator for their invite code</div>
               }
             </div>
+            {/* Non-affiliation acknowledgement, gating account creation.
+                The full consent modal and Terms screen fire on first SIGN-IN,
+                i.e. after the account already exists, so this is what makes the
+                disclosure land *before* it — a launch requirement. Wording is
+                the canonical sentence, verbatim. */}
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "12px 14px", borderRadius: 12, background: "rgba(255,255,255,.03)", border: `1px solid ${regAck ? "rgba(209,173,56,.4)" : fieldErrs.ack ? C.red + "88" : "rgba(255,255,255,.08)"}` }}>
+              <input
+                id="reg-ack"
+                type="checkbox"
+                checked={regAck}
+                onChange={e => { setRegAck(e.target.checked); setFieldErrs(p => ({ ...p, ack: "" })); }}
+                style={{ width: 18, height: 18, marginTop: 1, accentColor: C.gold, flexShrink: 0, cursor: "pointer" }}
+              />
+              <label htmlFor="reg-ack" style={{ fontSize: 12.5, color: "rgba(255,255,255,.75)", lineHeight: 1.55, cursor: "pointer" }}>
+                I understand that <strong style={{ color: C.white }}>We Move NY is not affiliated with, endorsed by, or operated by TWU Local 100 or the MTA</strong>, and that swap agreements are between operators only. I am responsible for making sure any swap complies with my collective bargaining agreement and depot rules.{" "}
+                <a href="/terms" style={{ color: C.gold, textDecoration: "underline" }}>Terms</a>{" · "}
+                <a href="/privacy" style={{ color: C.gold, textDecoration: "underline" }}>Privacy</a>
+              </label>
+            </div>
+            {fieldErrs.ack && <div style={{ fontSize: 11, color: C.red, marginTop: -6 }}>{fieldErrs.ack}</div>}
             <MagneticButton onClick={doRegister} disabled={submitting} style={{ padding: 16, borderRadius: 14, border: "none", cursor: "pointer", background: `linear-gradient(135deg,${C.gold},${C.gold}dd)`, fontSize: 16, fontWeight: 700, color: C.bg, opacity: submitting ? 0.7 : 1, width: "100%" }}>
               {submitting ? "Creating account..." : "Create Account →"}
             </MagneticButton>
@@ -368,7 +410,7 @@ export default function LoginPage() {
                 <strong style={{ color: C.white }}>WMNY Shift Swap</strong> is an unofficial peer-to-peer tool for MTA bus operators to coordinate shift swaps among themselves.
               </p>
               <p style={{ margin: "0 0 12px" }}>
-                This platform is <strong style={{ color: C.white }}>not affiliated with, endorsed by, or operated by the MTA</strong>, any transit agency, or any labor union.
+                <strong style={{ color: C.white }}>We Move NY is not affiliated with, endorsed by, or operated by TWU Local 100 or the MTA.</strong> Nor by any other transit agency or labor union.
               </p>
               <p style={{ margin: "0 0 12px" }}>
                 All swap agreements are <strong style={{ color: C.white }}>between operators only</strong>. It is your responsibility to ensure any swap complies with your collective bargaining agreement, depot rules, and all applicable MTA policies before submitting to your dispatcher.

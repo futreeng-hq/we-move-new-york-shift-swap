@@ -8,6 +8,7 @@ import { C, CM, STC, SWAP_TYPES } from "@/constants/colors";
 import Icon from "@/components/ui/Icon";
 import RepBadge from "@/components/ui/RepBadge";
 import { QRCodeSVG } from "qrcode.react";
+import { parseSwapDate } from "@/lib/swapDate";
 
 interface DayData { date: string; posted: number; agreements: number; }
 
@@ -25,7 +26,7 @@ function ActivityChart({ data }: { data: DayData[] }) {
 
   // Show every 7th label
   const labelIdxs = [0, 7, 14, 21, 29];
-  const fmt = (d: string) => { const dt = new Date(d + "T12:00"); return `${dt.getMonth() + 1}/${dt.getDate()}`; };
+  const fmt = (d: string) => { const dt = parseSwapDate(d); return dt ? `${dt.getMonth() + 1}/${dt.getDate()}` : ""; };
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 72 }} aria-label="30-day activity chart" role="img">
@@ -94,6 +95,7 @@ export default function RepDashboardPage() {
   useEffect(() => {
     if (!user) return;
     if (user.role !== "depotRep" && user.role !== "admin") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- role guard: the check needs the loaded user, so the state can only be set after render
       setError("Access restricted to depot reps and admins.");
       return;
     }
