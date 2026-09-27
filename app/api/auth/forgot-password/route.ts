@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { signResetToken } from "@/lib/auth";
 import { sendEmail } from "@/lib/email";
 import { ok, err } from "@/lib/apiResponse";
-import { rateLimitByIp, clientIp } from "@/lib/rateLimit";
+import { rateLimitStatusByIp, rateLimitResponse, clientIp } from "@/lib/rateLimit";
 import { parseBody, BODY_1KB } from "@/lib/parseBody";
 import { escapeHtml } from "@/lib/escapeHtml";
 import { getAppUrl } from "@/lib/appUrl";
@@ -13,9 +13,12 @@ import { getAppUrl } from "@/lib/appUrl";
 // Accepts { email } — sends reset link if account exists. Always returns 200 to prevent enumeration.
 export async function POST(req: NextRequest) {
   const ip = clientIp(req);
-  if (!await rateLimitByIp(ip, "forgot", 5, 15 * 60 * 1000)) {
-    Sentry.captureEvent({ message: "Forgot-password rate limit hit", level: "warning", tags: { ip } });
-    return err("Too many attempts — try again in 15 minutes", 429);
+  const rl = await rateLimitStatusByIp(ip, "forgot", 5, 15 * 60 * 1000);
+  if (!rl.allowed) {
+    // Only a real limit hit is an abuse signal — a Redis outage denies by
+    // policy and rateLimitStatus() reports that itself. See lib/rateLimit.ts.
+    if (rl.reason === "limited") Sentry.captureEvent({ message: "Forgot-password rate limit hit", level: "warning", tags: { ip } });
+    return rateLimitResponse(rl, "Too many attempts — try again in 15 minutes");
   }
 
   // Parse + size-limit before the enumeration-safe try/catch so 413 is returned as-is

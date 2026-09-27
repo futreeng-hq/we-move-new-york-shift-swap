@@ -5,11 +5,11 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "vercel-build": "prisma migrate deploy && next build",
+    "vercel-build": "prisma migrate deploy && node scripts/stamp-sw.mjs && next build",
     "start": "next start",
     "lint": "eslint --max-warnings 10",
     "test": "npm run test:concurrent && npm run test:isolated",
-    "test:concurrent": "node --import tsx --test test/env.test.ts test/clientIp.test.ts test/nyDate.test.ts test/agreementGuard.test.ts test/trustV2.test.ts test/notificationPrefs.test.ts test/auditSmalls.test.ts test/growth.test.ts test/sensitiveUrl.test.ts test/clientIpHardening.test.ts",
+    "test:concurrent": "node --import tsx --test test/env.test.ts test/clientIp.test.ts test/nyDate.test.ts test/agreementGuard.test.ts test/trustV2.test.ts test/notificationPrefs.test.ts test/auditSmalls.test.ts test/growth.test.ts test/sensitiveUrl.test.ts test/pushSupport.test.ts test/publicAssets.test.ts test/serviceWorker.test.ts test/rateLimitOutcome.test.ts test/clientIpHardening.test.ts",
     "test:isolated": "node --import tsx --test test/metrics.test.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",

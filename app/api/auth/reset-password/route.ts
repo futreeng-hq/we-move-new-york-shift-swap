@@ -4,7 +4,7 @@ import * as Sentry from "@sentry/nextjs";
 import { prisma } from "@/lib/prisma";
 import { verifyResetToken, checkActive } from "@/lib/auth";
 import { ok, err } from "@/lib/apiResponse";
-import { rateLimitByIp, clientIp } from "@/lib/rateLimit";
+import { rateLimitStatusByIp, rateLimitResponse, clientIp } from "@/lib/rateLimit";
 import { parseBody, BODY_2KB } from "@/lib/parseBody";
 import { consumeResetToken, isResetTokenUsed } from "@/lib/resetTokenBlocklist";
 import { blockUserAccessTokens } from "@/lib/tokenBlocklist";
@@ -14,9 +14,12 @@ import jwt from "jsonwebtoken";
 // Accepts { token, newPassword } — verifies JWT, updates password
 export async function POST(req: NextRequest) {
   const ip = clientIp(req);
-  if (!await rateLimitByIp(ip, "reset-password", 5, 15 * 60 * 1000)) {
-    Sentry.captureEvent({ message: "Reset-password rate limit hit", level: "warning", tags: { ip } });
-    return err("Too many attempts — try again in 15 minutes", 429);
+  const rl = await rateLimitStatusByIp(ip, "reset-password", 5, 15 * 60 * 1000);
+  if (!rl.allowed) {
+    // Only a real limit hit is an abuse signal — a Redis outage denies by
+    // policy and rateLimitStatus() reports that itself. See lib/rateLimit.ts.
+    if (rl.reason === "limited") Sentry.captureEvent({ message: "Reset-password rate limit hit", level: "warning", tags: { ip } });
+    return rateLimitResponse(rl, "Too many attempts — try again in 15 minutes");
   }
 
   const body = await parseBody(req, BODY_2KB);

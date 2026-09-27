@@ -61,12 +61,45 @@ export async function redisHealth(): Promise<RedisHealth> {
 }
 
 /**
- * Returns true if the request is allowed, false if rate limited.
+ * Why this is not just a boolean any more.
+ *
+ * On 2026-09-27 the Upstash free-tier instance hibernated. Combined with the
+ * fail-closed policy above, every login attempt came back
+ *
+ *   429 {"error":"Too many login attempts..."}
+ *
+ * which is a lie. Nobody was rate limited; the backend was asleep. The status
+ * code told users they were being throttled and told whoever read the logs to
+ * look for abuse, so the real cause — a sleeping cache — stayed hidden longer
+ * than it should have. A 429 also invites clients to retry on a backoff, which
+ * is exactly wrong for an outage that needs someone to wake the database.
+ *
+ * Callers that turn this into an HTTP response need to tell the two apart. The
+ * decision to deny is unchanged: failing closed is still the policy.
+ */
+export type RateLimitOutcome =
+  | { allowed: true }
+  /** Over the limit. A real 429. */
+  | { allowed: false; reason: "limited" }
+  /** Redis missing or erroring. Denied by policy, but this is a 503. */
+  | { allowed: false; reason: "unavailable" }
+  /** No trustworthy client IP. Denied in production; stays a 429 (see below). */
+  | { allowed: false; reason: "unattributable" };
+
+const ALLOWED: RateLimitOutcome = { allowed: true };
+
+/**
+ * Returns the outcome with its reason. `rateLimit()` wraps this for the many
+ * call sites that only need the boolean.
  * @param key      Unique key (e.g. "login:1.2.3.4")
  * @param limit    Max requests allowed in the window
  * @param windowMs Window size in milliseconds
  */
-export async function rateLimit(key: string, limit: number, windowMs: number): Promise<boolean> {
+export async function rateLimitStatus(
+  key: string,
+  limit: number,
+  windowMs: number,
+): Promise<RateLimitOutcome> {
   try {
     const store = getRedis();
     if (!store) {
@@ -76,14 +109,14 @@ export async function rateLimit(key: string, limit: number, windowMs: number): P
       // anywhere saying so.
       if (process.env.NODE_ENV === "production") {
         console.error("[rateLimit] Upstash is not configured in production — failing closed for key", key);
-        return false;
+        return { allowed: false, reason: "unavailable" };
       }
-      return true;
+      return ALLOWED;
     }
     const windowSec = Math.ceil(windowMs / 1000);
     const count = await store.incr(key);
     if (count === 1) await store.expire(key, windowSec);
-    return count <= limit;
+    return count <= limit ? ALLOWED : { allowed: false, reason: "limited" };
   } catch (e) {
     // Fails CLOSED in production (see the header comment) and open elsewhere.
     console.error("[rateLimit] Redis error — failing closed in production for key", key, e);
@@ -99,8 +132,36 @@ export async function rateLimit(key: string, limit: number, windowMs: number): P
         // Don't let Sentry import failure break the rate limiter
       }
     }
-    return process.env.NODE_ENV !== "production";
+    if (process.env.NODE_ENV === "production") return { allowed: false, reason: "unavailable" };
+    return ALLOWED;
   }
+}
+
+/** Boolean form, for the call sites that only gate an action. */
+export async function rateLimit(key: string, limit: number, windowMs: number): Promise<boolean> {
+  return (await rateLimitStatus(key, limit, windowMs)).allowed;
+}
+
+/**
+ * Map an outcome onto a response. Keeps the 429/503 split in one place so it
+ * cannot drift between routes.
+ *
+ * `unattributable` deliberately stays a 429 rather than becoming a 400 or 503.
+ * On Vercel it only trips on genuinely malformed forwarding headers, and a
+ * distinct status there would hand an attacker a signal for which requests the
+ * limiter could not attribute.
+ */
+export function rateLimitResponse(outcome: RateLimitOutcome, limitedMessage: string): Response {
+  if (outcome.allowed) throw new Error("rateLimitResponse called on an allowed outcome");
+  if (outcome.reason === "unavailable") {
+    return Response.json(
+      { error: "Service temporarily unavailable. Please try again in a moment." },
+      // Retry-After is the honest instruction: this is transient and on our
+      // side. A 429's implied "you did too much" is not true here.
+      { status: 503, headers: { "retry-after": "30" } },
+    );
+  }
+  return Response.json({ error: limitedMessage }, { status: 429 });
 }
 
 // Number of proxies in front of this app that append to X-Forwarded-For.
@@ -153,8 +214,22 @@ export async function rateLimitByIp(
   limit: number,
   windowMs: number,
 ): Promise<boolean> {
-  if (ip === null) return process.env.NODE_ENV !== "production";
-  return rateLimit(`${prefix}:${ip}`, limit, windowMs);
+  return (await rateLimitStatusByIp(ip, prefix, limit, windowMs)).allowed;
+}
+
+/** Outcome-returning form of rateLimitByIp, for routes that render 429 vs 503. */
+export async function rateLimitStatusByIp(
+  ip: string | null,
+  prefix: string,
+  limit: number,
+  windowMs: number,
+): Promise<RateLimitOutcome> {
+  if (ip === null) {
+    return process.env.NODE_ENV === "production"
+      ? { allowed: false, reason: "unattributable" }
+      : ALLOWED;
+  }
+  return rateLimitStatus(`${prefix}:${ip}`, limit, windowMs);
 }
 
 /**

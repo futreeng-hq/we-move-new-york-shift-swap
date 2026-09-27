@@ -5,7 +5,7 @@ import * as Sentry from "@sentry/nextjs";
 import { prisma } from "@/lib/prisma";
 import { genInviteCode } from "@/lib/inviteCode";
 import { err } from "@/lib/apiResponse";
-import { rateLimitByIp, clientIp } from "@/lib/rateLimit";
+import { rateLimitStatusByIp, rateLimitResponse, clientIp } from "@/lib/rateLimit";
 import { parseBody, BODY_4KB } from "@/lib/parseBody";
 import { sendEmail } from "@/lib/email";
 import { escapeHtml } from "@/lib/escapeHtml";
@@ -27,9 +27,12 @@ export async function POST(req: NextRequest) {
   }
 
   const ip = clientIp(req);
-  if (!await rateLimitByIp(ip, "register", 5, 3_600_000)) {
-    Sentry.captureEvent({ message: "Register rate limit hit", level: "warning", tags: { ip } });
-    return err("Too many registration attempts — try again in an hour", 429);
+  const rl = await rateLimitStatusByIp(ip, "register", 5, 3_600_000);
+  if (!rl.allowed) {
+    // Only a real limit hit is an abuse signal — a Redis outage denies by
+    // policy and rateLimitStatus() reports that itself. See lib/rateLimit.ts.
+    if (rl.reason === "limited") Sentry.captureEvent({ message: "Register rate limit hit", level: "warning", tags: { ip } });
+    return rateLimitResponse(rl, "Too many registration attempts — try again in an hour");
   }
 
   const body = await parseBody(req, BODY_4KB);

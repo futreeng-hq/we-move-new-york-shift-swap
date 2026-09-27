@@ -4,7 +4,7 @@ import * as Sentry from "@sentry/nextjs";
 import { prisma } from "@/lib/prisma";
 import { signAccessToken, signRefreshToken } from "@/lib/auth";
 import { err } from "@/lib/apiResponse";
-import { rateLimitByIp, clientIp } from "@/lib/rateLimit";
+import { rateLimitStatusByIp, rateLimitResponse, clientIp } from "@/lib/rateLimit";
 import { parseBody, BODY_1KB } from "@/lib/parseBody";
 import { writeAuditLog } from "@/lib/audit";
 import { isDepotInSoftLaunch } from "@/lib/softLaunch";
@@ -29,13 +29,21 @@ const GENERIC_CREDENTIAL_ERROR = "Invalid email or password";
 export async function POST(req: NextRequest) {
   try {
     const ip = clientIp(req);
-    if (!await rateLimitByIp(ip, "login", 10, 60_000)) {
-      Sentry.captureEvent({
-        message: "Login rate limit hit",
-        level: "warning",
-        tags: { ip },
-      });
-      return err("Too many attempts — try again in a minute", 429);
+    const rl = await rateLimitStatusByIp(ip, "login", 10, 60_000);
+    if (!rl.allowed) {
+      // Only a real limit hit is an abuse signal. When Redis is unreachable the
+      // limiter denies by policy, and recording that as "Login rate limit hit"
+      // buried the actual cause — a hibernating Upstash instance — under a pile
+      // of events that read like an attack. rateLimitStatus() already reports
+      // the Redis failure to Sentry itself.
+      if (rl.reason === "limited") {
+        Sentry.captureEvent({
+          message: "Login rate limit hit",
+          level: "warning",
+          tags: { ip },
+        });
+      }
+      return rateLimitResponse(rl, "Too many attempts — try again in a minute");
     }
 
     const body = await parseBody(req, BODY_1KB);
