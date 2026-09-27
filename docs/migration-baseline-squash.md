@@ -6,13 +6,39 @@ Executes [#40](https://github.com/wemovenewyork/we-move-new-york-shift-swap/issu
 
 ## ⚠️ Read this first
 
-**`vercel-build` runs `prisma migrate deploy` on every production deploy.**
+**`vercel-build` runs `prisma migrate deploy` on EVERY deploy — preview as well
+as production.**
 
 ```json
 "vercel-build": "prisma migrate deploy && next build"
 ```
 
-So merging the squash PR *before* running `migrate resolve --applied` on each live environment does not fail safely. Rehearsed on a database seeded to look like production:
+**CORRECTED 2026-09-27 — this section previously said the danger was merging.
+It is not. It is PUSHING.** Pushing the squash branch creates a Vercel preview
+deployment, which runs `vercel-build` against the PREVIEW database. That is a
+write, and it happens before any PR is merged or even opened.
+
+This actually happened. Pushing `chore/migration-baseline-squash` produced
+deployment `dpl_BtmmREBGUQSacRfu6YWJ4sLKxNqH` (state ERROR):
+
+```
+Applying migration `20260720000000_baseline`
+Error: P3018
+Database error code: 42710
+ERROR: type "AgreementStatus" already exists
+```
+
+Preview was left with a failed `20260720000000_baseline` row in
+`_prisma_migrations`, blocking every subsequent preview deploy until it was
+resolved by hand. Nothing was partially applied — `CREATE TYPE
+"AgreementStatus"` is the first executable statement in the baseline, so it
+failed on statement one — but the bookkeeping damage was real.
+
+**Correct gating: resolve each live environment BEFORE the branch is pushed,
+or accept that the first preview deploy will fail and plan to resolve preview
+immediately after pushing.** Merging is the second gate, not the first.
+
+The original rehearsal below used a database seeded to look like production:
 
 ```
 Applying migration `20260720000000_baseline`
@@ -22,7 +48,11 @@ Database error code: 42710          ← duplicate object: the tables already exi
 
 P3018 records the migration as **failed** in `_prisma_migrations`, which then blocks *every subsequent deploy* until someone resolves it by hand. A broken deploy pipeline, not just a broken deploy.
 
-**The resolve step must happen on every live environment before the PR merges.** That ordering is the whole point of this runbook.
+**The resolve step must happen on every live environment before that
+environment gets a deploy carrying the baseline.** For preview that means
+before the branch is pushed; for production, before the PR merges. That
+ordering is the whole point of this runbook, and getting it half-right — the
+merge gate without the push gate — is what broke preview on 2026-09-27.
 
 ---
 
@@ -181,6 +211,12 @@ Clean no-op. This is the path to follow.
 Do **not** reorder. Steps 3–4 must complete before step 5.
 
 1. **Open the squash PR.** Delete the 16 migration dirs, add `20260720000000_baseline/`, keep `migration_lock.toml`. Do not merge yet.
+
+   ⚠️ **Pushing the branch triggers a Vercel preview deploy, which runs
+   `migrate deploy` against the PREVIEW database and will fail with P3018.**
+   Either resolve preview before pushing, or push and then immediately run
+   step 4 against preview to clear the failed row. Do not leave preview in a
+   failed state — it blocks every later preview deploy.
 2. **Verify CI.** The `test` job builds from `db push`, so it stays green either way — this step confirms nothing else broke, it does not validate the baseline. Validation is step 3.
 3. **Rehearse on a fresh Neon branch off production.** Run `migrate resolve --applied 20260720000000_baseline`, then `migrate deploy`, and confirm `No pending migrations to apply`. Delete the branch. Repeat if anything is unclear — this is free.
 4. **Resolve on each live environment,** preview first, then production:

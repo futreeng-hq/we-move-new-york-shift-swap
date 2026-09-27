@@ -1,1 +1,0 @@
-ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "verified_operator" BOOLEAN NOT NULL DEFAULT false;
