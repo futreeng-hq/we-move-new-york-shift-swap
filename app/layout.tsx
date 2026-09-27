@@ -17,13 +17,54 @@ const poppins = Poppins({
 });
 
 export const metadata: Metadata = {
+  // metadataBase is what lets Next resolve the relative opengraph-image route
+  // into the absolute URL that scrapers require. Without it the card silently
+  // does not render, which is the same failure as having no card at all.
+  metadataBase: new URL("https://www.wmnyshiftswap.com"),
   title: "WMNY Shift Swap",
   description: "Peer-to-peer shift swap platform for NYC MTA bus operators",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
+    // DO NOT add `viewport-fit=cover` (a `viewport` export with
+    // `viewportFit: "cover"`) without also adding env(safe-area-inset-*)
+    // padding throughout.
+    //
+    // "black-translucent" asks iOS to render the installed app behind the
+    // status bar, but that only takes effect once the viewport opts into
+    // full-bleed with viewport-fit=cover. Next's default viewport does not,
+    // so today the web view stays inside the safe area and nothing is
+    // clipped — verified on a real iPhone, installed to the home screen,
+    // 2026-09-27.
+    //
+    // Adding viewport-fit=cover on its own would switch on the full-bleed
+    // behaviour with no inset handling anywhere in globals.css, putting the
+    // header under the notch and the six `position: fixed` elements under the
+    // home indicator. If you want edge-to-edge, do both changes together and
+    // check it on hardware.
     statusBarStyle: "black-translucent",
     title: "WMNY Shift Swap",
+  },
+  // The root page carried no Open Graph tags, so a link pasted into a text
+  // message, a Facebook group or a WhatsApp thread unfurled as a bare URL.
+  // app/s/[id] already had a card; the page people actually share did not.
+  //
+  // Deliberately says nothing specific about swaps or depots: this card gets
+  // forwarded to people who do not have accounts, and "invite-only" is the
+  // honest framing of what they will find.
+  openGraph: {
+    type: "website",
+    siteName: "WMNY Shift Swap",
+    title: "WMNY Shift Swap",
+    description:
+      "Swap work days, days off and vacation picks with operators at your depot. Invite-only, built by a 32-year transit veteran.",
+    url: "https://www.wmnyshiftswap.com",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "WMNY Shift Swap",
+    description:
+      "Swap work days, days off and vacation picks with operators at your depot. Invite-only.",
   },
 };
 

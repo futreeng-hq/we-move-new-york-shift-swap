@@ -769,6 +769,140 @@ and verify on a preview deployment before promoting.
 
 ---
 
+## 5d. Pre-launch audit and the backup blocker — 2026-09-27
+
+A full go/no-go audit was run against live production. Most of it passed on
+evidence rather than inspection; this section records the two findings that
+mattered and the one that was a genuine blocker.
+
+### Verified live against production
+
+Security headers are present and tight on every response: CSP with
+`default-src 'self'`, `frame-ancestors 'none'` and `form-action 'self'`; HSTS
+with `includeSubDomains; preload`; `X-Frame-Options: DENY`; `nosniff`;
+`Referrer-Policy: strict-origin-when-cross-origin`; and a Permissions-Policy
+denying camera, microphone and geolocation.
+
+Every protected endpoint probed unauthenticated returned `401`:
+`/api/admin/reports`, `/api/admin/users`, `/api/users/me`, `/api/swaps`,
+`/api/users/me/export`, `/api/cron/expire-swaps`. `/admin` serves only an app
+shell; the data sits behind the API.
+
+Zero `console.log` in shipped code, no placeholder copy, no hardcoded test
+credentials, custom `not-found.tsx` serving a real 404. Sentry configured for
+client, edge and server. All legal and help pages return 200.
+
+**A correction worth recording:** HSTS was first reported as missing. It is
+present — the browser tool used for the audit redacts that header on
+`.get()` and returned null. Re-read via `headers.entries()` it is there. A
+false finding on a launch checklist wastes as much time as a missed one.
+
+### ❌ BLOCKER — backups were unverified, then unavailable, now verified
+
+At audit time the project was on Neon's **Free** plan with a **6-hour** history
+window. Neon's pricing page additionally lists instant restore as *not
+available* on Free, which sits awkwardly against their point-in-time-restore
+doc; from outside the account it was not possible to tell which behaviour
+applied. Either way the honest answer to "can we undo a bad delete?" was
+"we don't know, and possibly no" — with real user data about to arrive.
+
+Resolved:
+
+1. Upgraded to the **Launch** plan (usage-based, no monthly minimum).
+2. Raised the history window to **7 days**. This does not happen automatically
+   on upgrade — the slider stays where it was, and a first check of the project
+   panel still read 6 hours. It needed setting explicitly and re-verifying.
+3. **Rehearsed an actual restore**, which is the part that makes this evidence
+   rather than a setting:
+   - Created branch `restore-test` from **production** at a point in time
+     roughly an hour earlier. Non-destructive: `Create branch` from a
+     timestamp, never `Restore`/`Reset` on the production branch, which
+     overwrites it.
+   - Confirmed production remained the default branch, unchanged.
+   - Pointed `DATABASE_URL` at `restore-test` and ran `prisma migrate status`.
+
+   Result — note the host, which proves the test hit the restore branch and
+   not production (`ep-purple-pond-am7nk03j`):
+
+   ```
+   Datasource "db": PostgreSQL database "neondb", schema "public"
+     at "ep-weathered-field-amwzm01h-pooler.c-5.us-east-1.aws.neon.tech"
+
+   2 migrations found in prisma/migrations
+
+   Database schema is up to date!
+   ```
+
+   The restored copy is not merely connectable — it is *correctly migrated*.
+   A restore that produces a half-migrated schema is exactly the failure
+   `/api/health` was rewritten to catch, and it would look healthy until every
+   route began returning 500s.
+
+4. Deleted `restore-test` and the leftover `squash rehearsal` branch. On a paid
+   plan extra branches bill at $1.50/branch-month.
+
+**Backups are verified as of 2026-09-27.** Re-rehearse after any change to the
+migration history or the Neon plan — a restore procedure that has not been run
+recently is a procedure nobody knows still works.
+
+### Cost: the uptime probe was defeating scale-to-zero
+
+`/api/health` runs `prisma.depot.count()` — a real query, deliberately, so the
+probe catches a half-migrated database. Neon suspends compute after **5 minutes**
+of inactivity. `.github/workflows/uptime.yml` ran on `*/5`, so the probe reset
+the idle timer and the compute never suspended.
+
+Invisible on Free. On Launch, compute bills at `$0.106/CU-hour` and the default
+compute is `0.25 ↔ 8 CU`, so a database that never sleeps is roughly **$19/month
+at the 0.25 floor** for an app with no users yet. Scale-to-zero was enabled in
+the console throughout; the workflow was preventing it from ever engaging.
+
+Changed to `*/15`. The trade is coarser detection — an incident surfaces up to
+15 minutes later instead of 5 — which is acceptable for a shift-swap board.
+Once operators use it daily their own traffic keeps the database warm during
+shift-change hours, at which point this is worth revisiting.
+
+### Open Graph: the link people actually share had no card
+
+The root page served no `og:title`, `og:description` or `og:image`.
+`app/s/[id]/opengraph-image.tsx` produced a card for individual swap links, but
+`wmnyshiftswap.com` — the URL an operator texts a coworker — unfurled as a bare
+link. For an invite-only app that spreads by word of mouth inside a depot, that
+link is the growth channel. Fixed with a static root card plus `metadataBase`,
+which is load-bearing: without it the relative image route never resolves to the
+absolute URL scrapers require and the card silently fails.
+
+### iOS safe area: investigated, verified, deliberately unchanged
+
+`appleWebApp.statusBarStyle` is `"black-translucent"`, and nothing in the app
+sets `viewport-fit=cover` or reads `env(safe-area-inset-*)`. That pairing can
+put content under the notch — but **verified on a real installed iPhone: nothing
+is clipped**, because Next's default viewport omits `viewport-fit=cover`, so iOS
+keeps the web view inside the safe area.
+
+No change made. Adding `viewport-fit=cover` alone would switch on full-bleed
+with no inset handling anywhere and create the bug. A comment in `layout.tsx`
+and a test in `test/openGraph.test.ts` now guard that pairing.
+
+### Known and accepted at launch
+
+- `robots.txt` is `User-agent: * / Disallow: /` with no sitemap. Correct for an
+  invite-only app; a deliberate decision, not an oversight.
+- Push **subscription** is verified on a physical iPhone
+  (`POST /api/push/subscribe 200`). Push **delivery** has never been exercised.
+- Android is untested: install, notifications, back-button behaviour.
+- No Lighthouse run: LCP, CLS, bundle size and unused JS/CSS are unmeasured.
+- `HEARTBEAT_URL_BASE` unset. Four of six healthchecks.io checks configured
+  (`expire-swaps`, `cleanup-swaps`, `expire-announcements`, `daily-digest`);
+  `agreement-followups` and `expiring-soon` outstanding.
+
+### Verdict
+
+🟢 **GO.** No critical blockers. The one that existed — unverified, possibly
+unavailable backups — is closed with a rehearsed restore.
+
+---
+
 ## 6. Second-pass changes, in brief
 
 Everything below was open at the end of the first pass and is now closed. Details
